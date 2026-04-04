@@ -9,9 +9,12 @@ export interface Brick {
   color: string
   points: number
   boxed: boolean     // false for stopwords — just text, no box
-  breakOff: number   // 0 = normal, >0 = seconds until explosion
-  breakOffVx: number // drift velocity when breaking off
+  breakOff: number      // 0 = normal, >0 = seconds until explosion
+  breakOffVx: number    // drift velocity when breaking off (shared per group)
   breakOffAngle: number // rotation when breaking off
+  breakOffGroupId: number // island group id (0 = none)
+  breakOffOrigX: number   // original x at time of break-off
+  breakOffOrigY: number   // original y at time of break-off
 }
 
 export interface Ball {

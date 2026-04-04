@@ -76,32 +76,19 @@ export function renderGame(
 
     ctx.globalAlpha = brick.alpha
 
-    // Break-off rotation
-    const isBreaking = brick.breakOff > 0
-    if (isBreaking) {
-      ctx.save()
-      const cx = brick.x + brick.w / 2
-      const cy = brick.y + brick.h / 2
-      ctx.translate(cx, cy)
-      ctx.rotate(brick.breakOffAngle)
-      ctx.translate(-cx, -cy)
-    }
-
     if (brick.boxed) {
       ctx.fillStyle = '#0f1520'
-      ctx.strokeStyle = isBreaking ? '#fbbf24' : brick.color
-      ctx.lineWidth = isBreaking ? 2 : 1
+      ctx.strokeStyle = brick.color
+      ctx.lineWidth = brick.breakOff > 0 ? 2 : 1
       roundRect(ctx, brick.x, brick.y, brick.w, brick.h, 3)
       ctx.fill()
       ctx.stroke()
     }
 
     // Word text — drawn at world Y, translate handles the scroll
-    ctx.fillStyle = isBreaking ? '#fbbf24' : brick.color
+    ctx.fillStyle = brick.color
     ctx.textAlign = 'center'
     ctx.fillText(brick.word, brick.x + brick.w / 2, brick.y + brick.h / 2 + 1)
-
-    if (isBreaking) ctx.restore()
 
     ctx.globalAlpha = 1
   }

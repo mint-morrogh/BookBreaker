@@ -47,12 +47,13 @@ export class Game {
   private bricksScrollY = 0      // how far bricks have scrolled up
   private bricksDriftSpeed = 6.4  // px/sec upward drift (20% slower)
 
-  // book / chapter
+  // book / chapter / paragraph
   private book!: Book
   private chapterIdx = 0
-  private wordsInChapter: string[] = []
+  private paragraphIdx = 0
+  private wordsInParagraph: string[] = []
   private wordCursor = 0
-  private totalWordsInChapter = 0
+  private totalWordsInParagraph = 0
 
   // particles
   private particles: Particle[] = []
@@ -101,6 +102,7 @@ export class Game {
   private endGrade = ''
   private endTotalWords = 0
   private endBrokenWords = 0
+  private levelLivesLost = 0
 
   // high scores (set on game over)
   private endScores: number[] = []
@@ -117,6 +119,15 @@ export class Game {
   private sidebarTimer = 0
   private purgeTimer = 0
   private islandCheckTimer = 0
+  private islandGroups = new Map<number, {
+    cx0: number; cy0: number      // initial centroid
+    vx: number; vy: number        // shared velocity
+    rotSpeed: number              // rotation speed (rad/s)
+    angle: number                 // accumulated angle
+    timer: number                 // countdown to pop
+    initTimer: number             // initial timer value (for elapsed calc)
+  }>()
+  private nextIslandId = 1
 
   constructor(canvas: HTMLCanvasElement, bookIdx: number, tagMap: Map<string, WordTag>) {
     this.canvas = canvas
@@ -124,7 +135,7 @@ export class Game {
     this.book = BOOKS[bookIdx]
     setActiveTagMap(tagMap)
     this.resize()
-    this.loadChapter(0)
+    this.loadParagraph(0, 0)
     this.spawnBall()
     initLetterGrid()
     sidebarEls.bookName.textContent = this.book.title
@@ -155,7 +166,7 @@ export class Game {
         } else {
           this.levelState = 'playing'
           this.levelWords = []
-          this.advanceChapter()
+          this.advanceLevel()
         }
       } else if (this.paused) {
         this.paused = false
@@ -240,15 +251,19 @@ export class Game {
     this.safetyW = textW + 28
   }
 
-  // ── Chapter / Brick loading ─────────────────────────────────
-  private loadChapter(idx: number) {
-    this.chapterIdx = idx % this.book.chapters.length
-    const text = this.book.chapters[this.chapterIdx]
-    this.wordsInChapter = text.split(/\s+/).filter(w => w.length > 0)
-    this.totalWordsInChapter = this.wordsInChapter.length
+  // ── Chapter / Paragraph / Brick loading ─────────────────────
+  private loadParagraph(chapterIdx: number, paragraphIdx: number) {
+    this.chapterIdx = chapterIdx % this.book.chapters.length
+    const chapter = this.book.chapters[this.chapterIdx]
+    this.paragraphIdx = paragraphIdx % chapter.paragraphs.length
+    const text = chapter.paragraphs[this.paragraphIdx]
+    this.wordsInParagraph = text.split(/\s+/).filter(w => w.length > 0)
+    this.totalWordsInParagraph = this.wordsInParagraph.length
     this.wordCursor = 0
     this.bricks = []
     this.bricksScrollY = 0
+    this.islandGroups.clear()
+    this.nextIslandId = 1
     this.spawnBrickRows(8, this.H * 0.85)
   }
 
@@ -270,8 +285,8 @@ export class Game {
       let rowH = this.brickLineH + this.brickPadY * 2
       const rowBricks: Brick[] = []
 
-      while (curX < areaW + margin && this.wordCursor < this.wordsInChapter.length) {
-        const word = this.wordsInChapter[this.wordCursor]
+      while (curX < areaW + margin && this.wordCursor < this.wordsInParagraph.length) {
+        const word = this.wordsInParagraph[this.wordCursor]
         // Use pretext to measure word width
         const prepared = prepareWithSegments(word, this.brickFont)
         const result = layoutWithLines(prepared, 9999, this.brickLineH)
@@ -296,6 +311,9 @@ export class Game {
           breakOff: 0,
           breakOffVx: 0,
           breakOffAngle: 0,
+          breakOffGroupId: 0,
+          breakOffOrigX: 0,
+          breakOffOrigY: 0,
         }
         rowBricks.push(brick)
         this.bricks.push(brick)
@@ -403,7 +421,7 @@ export class Game {
       if (tallyDone && this.endPenaltyShown && this.endTimer > tallyEndTime + 1.5) {
         // Calculate grade
         const pct = this.endTotalWords > 0 ? this.endBrokenWords / this.endTotalWords : 0
-        if (pct >= 1.0) this.endGrade = 'S'
+        if (pct >= 1.0 && this.levelLivesLost === 0) this.endGrade = 'S'
         else if (pct >= 0.90) this.endGrade = 'A'
         else if (pct >= 0.75) this.endGrade = 'B'
         else if (pct >= 0.60) this.endGrade = 'C'
@@ -431,7 +449,7 @@ export class Game {
         } else {
           this.levelState = 'playing'
           this.levelWords = []
-          this.advanceChapter()
+          this.advanceLevel()
         }
       }
       return
@@ -495,57 +513,71 @@ export class Game {
         this.islandCheckTimer = 0.5
       }
 
-      // Break-off bricks — float up slightly, wobble, then explode
-      for (const b of this.bricks) {
-        if (!b.alive || b.breakOff <= 0) continue
-        b.breakOff -= dt
-        b.y -= dt * 25  // float up a little faster than normal drift
-        b.x += b.breakOffVx * dt
-        b.breakOffAngle += dt * 2  // slow spin
+      // Break-off groups — move as unified icebergs, then pop together
+      for (const [groupId, grp] of this.islandGroups) {
+        grp.timer -= dt
 
-        if (b.breakOff <= 0) {
-          // Explode — award break-off bonus
-          b.alive = false
-          const bonus = Math.round(b.points * 1.5)
-          this.score += bonus
-          this.wordsBroken++
-          this.multiplier = Math.min(10.0, this.multiplier + 0.3)
-          this.levelWords.push({ word: b.word, color: b.color, points: bonus })
+        // Compute elapsed translation
+        const bricksInGroup = this.bricks.filter(b => b.alive && b.breakOffGroupId === groupId)
+        if (bricksInGroup.length === 0) { this.islandGroups.delete(groupId); continue }
 
-          // Collect letters
-          for (const ch of b.word.toUpperCase()) {
-            if (ch >= 'A' && ch <= 'Z') {
-              this.letterCounts[ch] = (this.letterCounts[ch] || 0) + 1
-              const el = document.getElementById(`letter-${ch}`)
-              if (el) el.classList.add('collected')
+        // Move each brick: translate as a rigid group (no rotation — preserves shape)
+        const elapsed = grp.initTimer - grp.timer
+        for (const b of bricksInGroup) {
+          b.breakOff = grp.timer  // keep in sync
+          b.x = b.breakOffOrigX + grp.vx * elapsed
+          b.y = b.breakOffOrigY + grp.vy * elapsed
+        }
+
+        if (grp.timer <= 0) {
+          // Pop all bricks in this group simultaneously
+          for (const b of bricksInGroup) {
+            b.alive = false
+            const bonus = Math.round(b.points * 1.5)
+            this.score += bonus
+            this.wordsBroken++
+            this.multiplier = Math.min(10.0, this.multiplier + 0.3)
+            this.levelWords.push({ word: b.word, color: b.color, points: bonus })
+
+            // Collect letters
+            for (const ch of b.word.toUpperCase()) {
+              if (ch >= 'A' && ch <= 'Z') {
+                this.letterCounts[ch] = (this.letterCounts[ch] || 0) + 1
+                const el = document.getElementById(`letter-${ch}`)
+                if (el) el.classList.add('collected')
+              }
+            }
+
+            // Rainbow particles — keep each brick's original color
+            const bsy = b.y - this.bricksScrollY
+            for (let i = 0; i < b.word.length; i++) {
+              this.particles.push({
+                x: b.x + (i / b.word.length) * b.w + 8,
+                y: bsy + b.h / 2,
+                vx: (Math.random() - 0.5) * 300,
+                vy: (Math.random() - 0.5) * 300,
+                char: b.word[i], life: 1.0, maxLife: 1.2,
+                color: b.color, size: 16,
+              })
             }
           }
-
-          // Particles
-          const bsy = b.y - this.bricksScrollY
-          for (let i = 0; i < b.word.length; i++) {
-            this.particles.push({
-              x: b.x + (i / b.word.length) * b.w + 8,
-              y: bsy + b.h / 2,
-              vx: (Math.random() - 0.5) * 250,
-              vy: (Math.random() - 0.5) * 250,
-              char: b.word[i], life: 1.0, maxLife: 1.2,
-              color: '#fbbf24', size: 16,
-            })
-          }
-          // Bonus popup
+          // Single group bonus popup at centroid
+          const totalBonus = bricksInGroup.reduce((s, b) => s + Math.round(b.points * 1.5), 0)
+          const fullElapsed = grp.initTimer
+          const popCy = grp.cy0 + grp.vy * fullElapsed - this.bricksScrollY
           this.particles.push({
-            x: b.x + b.w / 2, y: bsy,
+            x: grp.cx0 + grp.vx * fullElapsed, y: popCy,
             vx: 0, vy: -50,
-            char: `BREAK-OFF +${bonus}`,
+            char: `BREAK-OFF +${totalBonus}`,
             life: 1.5, maxLife: 1.5,
-            color: '#fbbf24', size: 14,
+            color: '#fff', size: 14,
           })
+          this.islandGroups.delete(groupId)
         }
       }
 
       // Level clear: all words placed and all bricks broken
-      if (this.levelState === 'playing' && this.wordCursor >= this.wordsInChapter.length && !this.bricks.some(b => b.alive)) {
+      if (this.levelState === 'playing' && this.wordCursor >= this.wordsInParagraph.length && !this.bricks.some(b => b.alive)) {
         this.startEndSequence()
       }
 
@@ -593,6 +625,7 @@ export class Game {
           ev.ball.backWallHits = 0
           this.multiplier = 1.0
           this.lives--
+          this.levelLivesLost++
           if (this.lives <= 0) {
             this.startEndSequence()
           }
@@ -752,15 +785,35 @@ export class Game {
       if (g.length > mainGroup.length) mainGroup = g
     }
 
-    // All other groups are islands — flag them for break-off
+    // All other groups are islands — flag them for break-off as unified icebergs
     const mainSet = new Set(mainGroup)
     for (const g of groups.values()) {
       if (g === mainGroup) continue
+
+      // Compute group centroid
+      let cx = 0, cy = 0
+      for (const b of g) { cx += b.x + b.w / 2; cy += b.y + b.h / 2 }
+      cx /= g.length; cy /= g.length
+
+      // Shared group properties — drift upward together, no rotation (preserves shape)
+      const groupId = this.nextIslandId++
+      const timer = 1.2 + Math.random() * 0.4  // 1.2–1.6s until pop (longer for drama)
+      const vx = (Math.random() - 0.5) * 30     // slight lateral drift
+      const vy = -(40 + Math.random() * 20)     // always upward (40–60 px/sec)
+      const rotSpeed = 0                         // no rotation — hold shape
+
+      this.islandGroups.set(groupId, {
+        cx0: cx, cy0: cy, vx, vy, rotSpeed, angle: 0, timer, initTimer: timer,
+      })
+
       for (const b of g) {
         if (mainSet.has(b)) continue
-        b.breakOff = 0.6 + Math.random() * 0.3  // 0.6–0.9s until pop
-        b.breakOffVx = (Math.random() - 0.5) * 60
-        b.breakOffAngle = (Math.random() - 0.5) * 0.4
+        b.breakOff = timer
+        b.breakOffVx = 0  // unused now, group handles movement
+        b.breakOffAngle = 0
+        b.breakOffGroupId = groupId
+        b.breakOffOrigX = b.x
+        b.breakOffOrigY = b.y
       }
     }
   }
@@ -775,14 +828,14 @@ export class Game {
     this.endPenaltyShown = false
     this.endGrade = ''
     this.endTimer = 0
-    this.endTotalWords = this.totalWordsInChapter
+    this.endTotalWords = this.totalWordsInParagraph
     this.endBrokenWords = this.wordsBroken
     this.levelState = this.endPopBricks.length > 0 ? 'endPopping' : 'endTally'
     for (const ball of this.balls) { ball.stuck = true; ball.trail = [] }
   }
 
   private spawnMoreBricks() {
-    if (this.wordCursor >= this.wordsInChapter.length) {
+    if (this.wordCursor >= this.wordsInParagraph.length) {
       // Chapter exhausted — wait for all bricks to be cleared
       return
     }
@@ -796,6 +849,7 @@ export class Game {
     this.multiplier = 1.0
     this.wordsBroken = 0
     this.lives = 3
+    this.levelLivesLost = 0
     this.letterCounts = {}
     this.alphabetCompletions = 0
     this.widenLevel = 0
@@ -809,17 +863,25 @@ export class Game {
     this.particles = []
     this.levelWords = []
     this.levelState = 'playing'
-    this.loadChapter(0)
+    this.loadParagraph(0, 0)
     this.balls = []
     this.spawnBall()
     initLetterGrid()
     this.updateSidebar()
   }
 
-  private advanceChapter() {
-    this.chapterIdx = (this.chapterIdx + 1) % this.book.chapters.length
-    this.loadChapter(this.chapterIdx)
+  private advanceLevel() {
+    const chapter = this.book.chapters[this.chapterIdx]
+    if (this.paragraphIdx + 1 < chapter.paragraphs.length) {
+      // Next paragraph in same chapter
+      this.loadParagraph(this.chapterIdx, this.paragraphIdx + 1)
+    } else {
+      // Next chapter, first paragraph
+      this.chapterIdx = (this.chapterIdx + 1) % this.book.chapters.length
+      this.loadParagraph(this.chapterIdx, 0)
+    }
     // Reset upgrades for new level
+    this.levelLivesLost = 0
     this.widenLevel = 0
     this.safetyHits = 0
     this.slowTimer = 0
@@ -910,12 +972,13 @@ export class Game {
     sidebarEls.lives.textContent = String(this.lives)
     sidebarEls.combo.textContent = `x${this.multiplier.toFixed(1)}`
     sidebarEls.words.textContent = String(this.wordsBroken)
-    sidebarEls.chapterLabel.textContent = `Chapter ${this.chapterIdx + 1} of ${this.book.chapters.length}`
+    const chapter = this.book.chapters[this.chapterIdx]
+    sidebarEls.chapterLabel.textContent = `Ch ${this.chapterIdx + 1}  ·  ${this.paragraphIdx + 1}/${chapter.paragraphs.length}`
     // Progress = words broken in this chapter / total words
     const bricksAlive = this.bricks.filter(b => b.alive).length
     const wordsPlaced = this.wordCursor
     const broken = wordsPlaced - bricksAlive
-    const pct = this.totalWordsInChapter > 0 ? Math.round((broken / this.totalWordsInChapter) * 100) : 0
+    const pct = this.totalWordsInParagraph > 0 ? Math.round((broken / this.totalWordsInParagraph) * 100) : 0
     sidebarEls.progressBar.style.width = `${pct}%`
     sidebarEls.progressText.textContent = `${pct}%`
   }
@@ -977,7 +1040,9 @@ export class Game {
       // Chapter title
       ctx.fillStyle = '#e8c44a'
       ctx.font = `bold 22px 'JetBrains Mono', monospace`
-      ctx.fillText('CHAPTER COMPLETE', W / 2, H * 0.28)
+      const chapter = this.book.chapters[this.chapterIdx]
+      const isChapterDone = this.paragraphIdx + 1 >= chapter.paragraphs.length
+      ctx.fillText(isChapterDone ? 'CHAPTER COMPLETE' : 'PARAGRAPH COMPLETE', W / 2, H * 0.28)
 
       // Scrolling word tally — show last few words rapidly
       ctx.font = `13px 'JetBrains Mono', monospace`
@@ -1065,7 +1130,7 @@ export class Game {
         ctx.fillText(
           isDead ? '[ CLICK or SPACE to continue ]' :
           isFail ? '[ CLICK or SPACE to restart ]' :
-          '[ CLICK or SPACE for next chapter ]',
+          '[ CLICK or SPACE to continue ]',
           W / 2, H * 0.68,
         )
       }

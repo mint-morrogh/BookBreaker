@@ -84,7 +84,7 @@ export function activateUpgrade(pickup: Pickup, state: UpgradeState): UpgradeEve
     const durations = [0, 3, 5, 8, 12]
     state.slowTimer += durations[pickup.tier] ?? 3
   } else if (pickup.type === 'magnet') {
-    state.magnetStrength += pickup.tier * 60
+    state.magnetStrength += pickup.tier * 120
   } else if (pickup.type === 'piercing') {
     const pierceCounts = [0, 2, 3, 4, 5]
     for (const ball of state.balls) {

@@ -18,9 +18,9 @@ const STOP_WORDS = new Set([
  * Process all chapters of a book and build a word → tag lookup.
  * Returns a Map where keys are lowercased words.
  */
-export function tagBook(chapters: string[]): Map<string, WordTag> {
+export function tagBook(chapters: { title: string; paragraphs: string[] }[]): Map<string, WordTag> {
   const tagMap = new Map<string, WordTag>()
-  const fullText = chapters.join(' ')
+  const fullText = chapters.flatMap(ch => ch.paragraphs).join(' ')
   const doc = nlp(fullText)
 
   // Extract people and place names first (most specific)

@@ -48,16 +48,17 @@ export function updateBalls(
     if (ball.trail.length > 16) ball.trail.shift()
     for (const t of ball.trail) t.age += dt
 
-    // Magnet: pull ball toward paddle — only when within range
+    // Magnet: bend ball toward paddle — gentle at range, aggressive up close
     if (state.magnetStrength > 0) {
-      const magnetRange = 200  // only activates within this distance of paddle
+      const magnetRange = 350
       const padCx = state.paddleX + state.paddleW / 2
       const padCy = state.paddleY + state.paddleH / 2
       const mdx = padCx - ball.x
       const mdy = padCy - ball.y
       const mDist = Math.sqrt(mdx * mdx + mdy * mdy)
       if (mDist > 1 && mDist < magnetRange) {
-        const falloff = 1 - mDist / magnetRange  // stronger when closer
+        const t = 1 - mDist / magnetRange        // 0 at edge, 1 at paddle
+        const falloff = t * t                     // quadratic — ramps hard near paddle
         ball.vx += (mdx / mDist) * state.magnetStrength * falloff * dt
         ball.vy += (mdy / mDist) * state.magnetStrength * falloff * dt
       }
