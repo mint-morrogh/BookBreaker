@@ -33,6 +33,7 @@ export class Game {
   private paddleBaseY = 50
   private paddleTargetY = 50
   private paddleVy = 0
+  private paddleVyInternal = 0  // acceleration state for forward slam
   private prevPaddleY = 50
   private paddleText = 'BOOK BREAKER'
   private paddlePadX = 14
@@ -117,6 +118,7 @@ export class Game {
   // input
   private mouseX = -1
   private mouseDown = false   // left click held = paddle pushes forward
+  private slamActive = false  // true while paddle is traveling forward (click or hold)
   private slamCooldown = 0    // seconds until next slam allowed
   private keysDown = new Set<string>()
 
@@ -572,10 +574,28 @@ export class Game {
     this.paddleTargetX = Math.max(0, Math.min(this.W - this.paddleW, this.paddleTargetX))
     this.paddleX += (this.paddleTargetX - this.paddleX) * Math.min(1, dt * 18)
 
-    // Paddle movement — vertical: left click pushes forward, release snaps back
+    // Paddle movement — vertical: click fires paddle to wall, release eases back
     if (this.slamCooldown > 0) this.slamCooldown -= dt
-    this.paddleTargetY = this.mouseDown ? this.paddleBaseY + 55 : this.paddleBaseY
-    this.paddleY += (this.paddleTargetY - this.paddleY) * Math.min(1, dt * 18)
+    const maxY = this.paddleBaseY + 55
+
+    // Activate slam on mousedown
+    if (this.mouseDown && !this.slamActive) this.slamActive = true
+
+    if (this.slamActive) {
+      // Accelerate into the wall — 2x speed
+      this.paddleVyInternal = Math.min(1600, this.paddleVyInternal + 4800 * dt)
+      this.paddleY = Math.min(maxY, this.paddleY + this.paddleVyInternal * dt)
+      // Once at the wall, stop accelerating. Only return when mouse is released.
+      if (this.paddleY >= maxY) {
+        this.paddleY = maxY
+        this.paddleVyInternal = 0
+        if (!this.mouseDown) this.slamActive = false
+      }
+    } else {
+      // Ease back to base — smooth exponential
+      this.paddleVyInternal = 0
+      this.paddleY += (this.paddleBaseY - this.paddleY) * Math.min(1, dt * 14)
+    }
     this.paddleVy = (this.paddleY - this.prevPaddleY) / Math.max(dt, 0.001)
     this.prevPaddleY = this.paddleY
 
@@ -1098,7 +1118,8 @@ export class Game {
 
   private advanceLevel() {
     const chapter = this.book.chapters[this.chapterIdx]
-    if (this.paragraphIdx + 1 < chapter.paragraphs.length) {
+    const isNewChapter = this.paragraphIdx + 1 >= chapter.paragraphs.length
+    if (!isNewChapter) {
       // Next paragraph in same chapter
       this.loadParagraph(this.chapterIdx, this.paragraphIdx + 1)
     } else {
@@ -1108,26 +1129,40 @@ export class Game {
     }
     // Wait for ball launch before scrolling
     this.started = false
-    // Reset upgrades for new level
     this.levelLivesLost = 0
-    this.widenLevel = 0
-    this.safetyHits = 0
     this.freezeTimer = 0
-    this.charge = 0
     this.bricksDriftSpeed = this.baseDriftSpeed
-    this.paddleText = 'BOOK BREAKER'
     this.paddleY = this.paddleBaseY
     this.paddleTargetY = this.paddleBaseY
     this.prevPaddleY = this.paddleBaseY
     this.paddleVy = 0
-    this.measurePaddle()
     this.pickups = []
-    // Re-stick ball for new level
-    for (const ball of this.balls) {
-      ball.stuck = true
-      ball.trail = []
-      ball.blastCharge = 0
-      ball.pierceLeft = 0
+
+    if (isNewChapter) {
+      // New chapter — full reset of upgrades
+      this.widenLevel = 0
+      this.safetyHits = 0
+      this.charge = 0
+      this.paddleText = 'BOOK BREAKER'
+      this.measurePaddle()
+      // Reset to single ball
+      this.balls = [{
+        x: this.paddleX + this.paddleW / 2,
+        y: this.paddleY + this.paddleH + 9,
+        vx: 0, vy: 0, r: 7,
+        trail: [], stuck: true,
+        backWallHits: 0, slamStacks: 0,
+        blastCharge: 0, pierceLeft: 0,
+      }]
+    } else {
+      // Same chapter — carry over charge, multiball, pierce, blast, widen, safety
+      // Just re-stick all balls and reset speed stacks
+      for (const ball of this.balls) {
+        ball.stuck = true
+        ball.trail = []
+        ball.backWallHits = 0
+        ball.slamStacks = 0
+      }
     }
   }
 
