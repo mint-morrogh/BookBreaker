@@ -961,7 +961,7 @@ export class Game {
     if (alive.length === 0) return
 
     // Adjacency: two bricks are neighbors if close in Y (within row gap) and overlapping in X
-    const rowGap = 35  // roughly brickLineH + gapY + tolerance
+    const rowGap = 45  // must exceed rowH + gapY (29 + 6 = 35) with margin for float rounding
     const xTolerance = 4
 
     // Union-find
