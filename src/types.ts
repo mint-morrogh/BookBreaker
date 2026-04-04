@@ -9,6 +9,9 @@ export interface Brick {
   color: string
   points: number
   boxed: boolean     // false for stopwords — just text, no box
+  breakOff: number   // 0 = normal, >0 = seconds until explosion
+  breakOffVx: number // drift velocity when breaking off
+  breakOffAngle: number // rotation when breaking off
 }
 
 export interface Ball {

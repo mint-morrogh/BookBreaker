@@ -116,6 +116,7 @@ export class Game {
   private paused = false
   private sidebarTimer = 0
   private purgeTimer = 0
+  private islandCheckTimer = 0
 
   constructor(canvas: HTMLCanvasElement, bookIdx: number, tagMap: Map<string, WordTag>) {
     this.canvas = canvas
@@ -292,6 +293,9 @@ export class Game {
           color,
           points: scoreWord(word, isStop),
           boxed: true,
+          breakOff: 0,
+          breakOffVx: 0,
+          breakOffAngle: 0,
         }
         rowBricks.push(brick)
         this.bricks.push(brick)
@@ -484,6 +488,62 @@ export class Game {
         this.spawnMoreBricks()
       }
 
+      // Island detection — check every 0.5s for disconnected brick groups
+      this.islandCheckTimer -= dt
+      if (this.islandCheckTimer <= 0 && this.levelState === 'playing') {
+        this.detectIslands()
+        this.islandCheckTimer = 0.5
+      }
+
+      // Break-off bricks — float up slightly, wobble, then explode
+      for (const b of this.bricks) {
+        if (!b.alive || b.breakOff <= 0) continue
+        b.breakOff -= dt
+        b.y -= dt * 25  // float up a little faster than normal drift
+        b.x += b.breakOffVx * dt
+        b.breakOffAngle += dt * 2  // slow spin
+
+        if (b.breakOff <= 0) {
+          // Explode — award break-off bonus
+          b.alive = false
+          const bonus = Math.round(b.points * 1.5)
+          this.score += bonus
+          this.wordsBroken++
+          this.multiplier = Math.min(10.0, this.multiplier + 0.3)
+          this.levelWords.push({ word: b.word, color: b.color, points: bonus })
+
+          // Collect letters
+          for (const ch of b.word.toUpperCase()) {
+            if (ch >= 'A' && ch <= 'Z') {
+              this.letterCounts[ch] = (this.letterCounts[ch] || 0) + 1
+              const el = document.getElementById(`letter-${ch}`)
+              if (el) el.classList.add('collected')
+            }
+          }
+
+          // Particles
+          const bsy = b.y - this.bricksScrollY
+          for (let i = 0; i < b.word.length; i++) {
+            this.particles.push({
+              x: b.x + (i / b.word.length) * b.w + 8,
+              y: bsy + b.h / 2,
+              vx: (Math.random() - 0.5) * 250,
+              vy: (Math.random() - 0.5) * 250,
+              char: b.word[i], life: 1.0, maxLife: 1.2,
+              color: '#fbbf24', size: 16,
+            })
+          }
+          // Bonus popup
+          this.particles.push({
+            x: b.x + b.w / 2, y: bsy,
+            vx: 0, vy: -50,
+            char: `BREAK-OFF +${bonus}`,
+            life: 1.5, maxLife: 1.5,
+            color: '#fbbf24', size: 14,
+          })
+        }
+      }
+
       // Level clear: all words placed and all bricks broken
       if (this.levelState === 'playing' && this.wordCursor >= this.wordsInChapter.length && !this.bricks.some(b => b.alive)) {
         this.startEndSequence()
@@ -492,7 +552,7 @@ export class Game {
       // Bricks reached the top wall → end sequence with remaining bricks
       if (this.levelState === 'playing') {
         for (const b of this.bricks) {
-          if (b.alive && b.y - this.bricksScrollY < 5) {
+          if (b.alive && b.breakOff <= 0 && b.y - this.bricksScrollY < 5) {
             this.startEndSequence()
             break
           }
@@ -636,6 +696,71 @@ export class Game {
       if (!b.alive && b.alpha > 0) {
         b.alpha -= dt * 4
         if (b.alpha < 0) b.alpha = 0
+      }
+    }
+  }
+
+  private detectIslands() {
+    const alive = this.bricks.filter(b => b.alive && b.breakOff === 0)
+    if (alive.length < 2) return
+
+    // Adjacency: two bricks are neighbors if close in Y (within row gap) and overlapping in X
+    const rowGap = 35  // roughly brickLineH + gapY + tolerance
+    const xTolerance = 4
+
+    // Union-find
+    const parent = new Map<Brick, Brick>()
+    const find = (b: Brick): Brick => {
+      let r = b
+      while (parent.get(r) !== r) r = parent.get(r)!
+      let c = b
+      while (c !== r) { const n = parent.get(c)!; parent.set(c, r); c = n }
+      return r
+    }
+    const union = (a: Brick, b: Brick) => {
+      const ra = find(a), rb = find(b)
+      if (ra !== rb) parent.set(ra, rb)
+    }
+
+    for (const b of alive) parent.set(b, b)
+
+    for (let i = 0; i < alive.length; i++) {
+      for (let j = i + 1; j < alive.length; j++) {
+        const a = alive[i], b = alive[j]
+        const dy = Math.abs(a.y - b.y)
+        if (dy > rowGap) continue
+        // X overlap check
+        if (a.x + a.w + xTolerance >= b.x && b.x + b.w + xTolerance >= a.x) {
+          union(a, b)
+        }
+      }
+    }
+
+    // Group by root
+    const groups = new Map<Brick, Brick[]>()
+    for (const b of alive) {
+      const root = find(b)
+      if (!groups.has(root)) groups.set(root, [])
+      groups.get(root)!.push(b)
+    }
+
+    if (groups.size <= 1) return  // only one group, nothing to break off
+
+    // Find the largest group (main body)
+    let mainGroup: Brick[] = []
+    for (const g of groups.values()) {
+      if (g.length > mainGroup.length) mainGroup = g
+    }
+
+    // All other groups are islands — flag them for break-off
+    const mainSet = new Set(mainGroup)
+    for (const g of groups.values()) {
+      if (g === mainGroup) continue
+      for (const b of g) {
+        if (mainSet.has(b)) continue
+        b.breakOff = 0.6 + Math.random() * 0.3  // 0.6–0.9s until pop
+        b.breakOffVx = (Math.random() - 0.5) * 60
+        b.breakOffAngle = (Math.random() - 0.5) * 0.4
       }
     }
   }
