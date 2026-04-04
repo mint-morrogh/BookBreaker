@@ -1,0 +1,58 @@
+export interface Brick {
+  word: string
+  x: number
+  y: number
+  w: number
+  h: number
+  alive: boolean
+  alpha: number      // for fade-out
+  color: string
+  points: number
+  boxed: boolean     // false for stopwords — just text, no box
+}
+
+export interface Ball {
+  x: number
+  y: number
+  vx: number
+  vy: number
+  r: number
+  trail: { x: number; y: number; age: number }[]
+  stuck: boolean     // stuck to paddle until launched
+  primary: boolean   // primary ball costs a life when lost
+  backWallHits: number  // speed stacks from hitting back wall (max 10)
+  blastCharge: number   // 0 = none, else tier (1-4) = blast radius on next hit
+  pierceLeft: number    // 0 = normal bounce, else bricks remaining to pierce through
+}
+
+export interface Particle {
+  x: number; y: number
+  vx: number; vy: number
+  char: string
+  life: number; maxLife: number
+  color: string
+  size: number
+}
+
+export type UpgradeType = 'widen' | 'multiball' | 'safety' | 'blast' | 'slow' | 'magnet' | 'piercing'
+
+export interface Pickup {
+  label: string
+  x: number
+  y: number
+  vy: number
+  wobblePhase: number
+  type: UpgradeType
+  tier: number       // 1-4
+  color: string
+  alive: boolean
+}
+
+export interface Dot {
+  homeX: number
+  homeY: number
+  x: number
+  y: number
+  vx: number
+  vy: number
+}

@@ -1,0 +1,13 @@
+# HyperSpace
+.env
+.env.local
+node_modules/
+
+# Build output
+dist/
+
+# AI tooling
+.claude/
+.hyperspace/
+memento/
+docs/

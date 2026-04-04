@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BookBreaker</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=IBM+Plex+Mono:wght@400;700&display=swap');
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      background: #06080c;
+      overflow: hidden;
+      font-family: 'JetBrains Mono', 'Courier New', monospace;
+      color: #c8d0dc;
+    }
+    #app {
+      display: flex;
+      width: 100%; height: 100%;
+    }
+    #game-area {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #06080c;
+    }
+    canvas {
+      display: block;
+    }
+    #sidebar {
+      width: 260px;
+      background: #0c1018;
+      border-left: 1px solid #1a2030;
+      padding: 20px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      overflow-y: auto;
+      user-select: none;
+    }
+    .sidebar-title {
+      font-size: 22px;
+      font-weight: 700;
+      color: #e8c44a;
+      text-align: center;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      text-shadow: 0 0 20px rgba(232, 196, 74, 0.3);
+    }
+    .sidebar-subtitle {
+      font-size: 10px;
+      color: #5a6578;
+      text-align: center;
+      letter-spacing: 2px;
+      margin-top: -10px;
+    }
+    .stat-box {
+      background: #0f1520;
+      border: 1px solid #1a2030;
+      border-radius: 6px;
+      padding: 12px;
+    }
+    .stat-label {
+      font-size: 9px;
+      color: #4a5568;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      margin-bottom: 4px;
+    }
+    .stat-value {
+      font-size: 24px;
+      font-weight: 700;
+      color: #7dd3fc;
+    }
+    .stat-value.combo { color: #f472b6; }
+    .stat-value.words { color: #a78bfa; }
+    .stat-value.chapter { color: #34d399; }
+    #letter-grid {
+      display: grid;
+      grid-template-columns: repeat(13, 1fr);
+      gap: 2px;
+    }
+    .letter-cell {
+      text-align: center;
+      font-size: 11px;
+      padding: 2px 0;
+      border-radius: 3px;
+      background: #111827;
+      color: #374151;
+      transition: all 0.3s;
+    }
+    .letter-cell.collected {
+      color: #fbbf24;
+      background: #1c1917;
+      text-shadow: 0 0 6px rgba(251, 191, 36, 0.4);
+    }
+    .letter-cell.alphabet-clear {
+      animation: alphabetPop 0.8s ease-out;
+      color: #fbbf24;
+      background: #422006;
+    }
+    @keyframes alphabetPop {
+      0% { transform: scale(1); }
+      30% { transform: scale(1.6); background: #fbbf24; color: #06080c; }
+      100% { transform: scale(1); }
+    }
+    .stat-value.lives { color: #f87171; }
+    #word-log::-webkit-scrollbar { display: none; }
+    #word-log {
+      flex: 1;
+      overflow-y: auto;
+      scrollbar-width: none;
+      font-size: 11px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .word-entry {
+      display: flex;
+      justify-content: space-between;
+      padding: 2px 6px;
+      border-radius: 3px;
+      background: #111520;
+      animation: wordFadeIn 0.3s ease-out;
+    }
+    .word-entry .word { color: #94a3b8; }
+    .word-entry .points { color: #fbbf24; font-weight: 700; }
+    @keyframes wordFadeIn {
+      from { opacity: 0; transform: translateX(10px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+    #controls-hint {
+      font-size: 9px;
+      color: #374151;
+      text-align: center;
+      letter-spacing: 1px;
+    }
+    /* Book picker */
+    #book-picker {
+      position: fixed;
+      inset: 0;
+      background: #06080c;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      gap: 16px;
+    }
+    .picker-title {
+      font-size: 42px;
+      font-weight: 700;
+      color: #e8c44a;
+      letter-spacing: 8px;
+      text-shadow: 0 0 40px rgba(232, 196, 74, 0.35), 0 0 80px rgba(232, 196, 74, 0.1);
+    }
+    .picker-subtitle {
+      font-size: 11px;
+      color: #4a5568;
+      letter-spacing: 4px;
+      text-transform: uppercase;
+      margin-bottom: 30px;
+      border-top: 1px solid #1a2030;
+      border-bottom: 1px solid #1a2030;
+      padding: 8px 24px;
+    }
+    #book-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      width: 480px;
+      max-width: 90vw;
+    }
+    .book-option {
+      background: #0a0e16;
+      border: 1px solid #1a2030;
+      border-left: 3px solid #1a2030;
+      border-radius: 4px;
+      padding: 18px 22px;
+      cursor: pointer;
+      transition: all 0.25s ease;
+      position: relative;
+    }
+    .book-option:hover {
+      border-color: #e8c44a;
+      border-left-color: #e8c44a;
+      background: #0f1520;
+      box-shadow: 0 0 24px rgba(232, 196, 74, 0.08), inset 0 0 30px rgba(232, 196, 74, 0.02);
+    }
+    .book-option:hover .book-opt-title {
+      color: #e8c44a;
+      text-shadow: 0 0 12px rgba(232, 196, 74, 0.2);
+    }
+    .book-option .book-opt-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: #c8d0dc;
+      letter-spacing: 1px;
+      transition: all 0.25s;
+    }
+    .book-option .book-opt-author {
+      font-size: 11px;
+      color: #4a5568;
+      margin-top: 3px;
+      font-style: italic;
+    }
+    .book-option .book-opt-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 10px;
+      color: #374151;
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid #111827;
+      letter-spacing: 1px;
+    }
+    .book-opt-score {
+      color: #e8c44a;
+      font-weight: 700;
+      text-shadow: 0 0 8px rgba(232, 196, 74, 0.3);
+    }
+    /* Sidebar book info */
+    #book-info {
+      background: #0f1520;
+      border: 1px solid #1a2030;
+      border-radius: 6px;
+      padding: 10px 12px;
+    }
+    .book-name {
+      font-size: 12px;
+      font-weight: 700;
+      color: #c8d0dc;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .chapter-label {
+      font-size: 10px;
+      color: #5a6578;
+      margin-top: 2px;
+      letter-spacing: 1px;
+    }
+    .progress-bar-wrap {
+      margin-top: 6px;
+      height: 4px;
+      background: #1a2030;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .progress-bar {
+      height: 100%;
+      width: 0%;
+      background: #e8c44a;
+      border-radius: 2px;
+      transition: width 0.3s;
+    }
+    .progress-text {
+      font-size: 10px;
+      color: #4a5568;
+      margin-top: 3px;
+      text-align: right;
+    }
+    /* Loading overlay */
+    #loading-overlay {
+      position: fixed;
+      inset: 0;
+      background: #06080c;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 200;
+      gap: 20px;
+    }
+    #loading-overlay.active { display: flex; }
+    .loading-title {
+      font-size: 14px;
+      color: #5a6578;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+    }
+    .loading-book {
+      font-size: 20px;
+      font-weight: 700;
+      color: #e8c44a;
+      letter-spacing: 2px;
+    }
+    .loading-bar-wrap {
+      width: 280px;
+      height: 6px;
+      background: #1a2030;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .loading-bar {
+      height: 100%;
+      width: 0%;
+      background: #e8c44a;
+      border-radius: 3px;
+      transition: width 0.3s ease-out;
+    }
+    .loading-status {
+      font-size: 11px;
+      color: #374151;
+      letter-spacing: 1px;
+    }
+  </style>
+</head>
+<body>
+  <!-- Loading overlay -->
+  <div id="loading-overlay">
+    <div class="loading-title">analyzing</div>
+    <div id="loading-book" class="loading-book"></div>
+    <div class="loading-bar-wrap">
+      <div id="loading-bar" class="loading-bar"></div>
+    </div>
+    <div id="loading-status" class="loading-status">classifying words...</div>
+  </div>
+
+  <!-- Book picker overlay -->
+  <div id="book-picker">
+    <div class="picker-title">BOOK BREAKER</div>
+    <div class="picker-subtitle">choose your book</div>
+    <div id="book-list"></div>
+  </div>
+
+  <div id="app" style="display:none;">
+    <div id="game-area">
+      <canvas id="game"></canvas>
+    </div>
+    <div id="sidebar">
+      <div class="sidebar-title">BookBreaker</div>
+      <div id="book-info">
+        <div id="book-name" class="book-name"></div>
+        <div id="chapter-label" class="chapter-label"></div>
+        <div id="progress-bar-wrap" class="progress-bar-wrap">
+          <div id="progress-bar" class="progress-bar"></div>
+        </div>
+        <div id="progress-text" class="progress-text">0%</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">Score</div>
+        <div class="stat-value" id="score-display">0</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">Lives</div>
+        <div class="stat-value lives" id="lives-display">3</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">Combo</div>
+        <div class="stat-value combo" id="combo-display">x1</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">Words Broken</div>
+        <div class="stat-value words" id="words-display">0</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">Letters Collected</div>
+        <div id="letter-grid"></div>
+      </div>
+      <div class="stat-box" style="flex:1;min-height:80px;">
+        <div class="stat-label">Words Log</div>
+        <div id="word-log"></div>
+      </div>
+      <div id="controls-hint">← → or MOUSE to move &nbsp;|&nbsp; SPACE to launch</div>
+    </div>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
