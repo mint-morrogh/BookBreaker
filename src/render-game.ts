@@ -173,10 +173,10 @@ export function renderGame(
 
     // Label
     ctx.fillStyle = '#f87171'
-    ctx.font = `bold 11px 'JetBrains Mono', monospace`
+    ctx.font = `bold ${sh - 5}px 'JetBrains Mono', monospace`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
-    ctx.fillText(state.safetyLabel, sx + sw / 2, sy + sh / 2)
+    ctx.fillText(state.safetyLabel, sx + sw / 2, sy + sh / 2 + 1)
   }
 
   // Top wall glow (blue — penalty line)

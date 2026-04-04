@@ -33,140 +33,74 @@ export interface GameOverState {
 }
 
 export function renderGameOver(ctx: CanvasRenderingContext2D, W: number, H: number, s: GameOverState) {
-  ctx.fillStyle = 'rgba(6, 8, 12, 0.92)'
+  ctx.fillStyle = 'rgba(6, 8, 12, 0.94)'
   ctx.fillRect(0, 0, W, H)
 
   const cx = W / 2
-  const panelW = 340
-  const panelX = cx - panelW / 2
 
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
 
-  // ─── Title bar ───
-  const titleY = H * 0.18
-  ctx.shadowColor = '#f87171'
-  ctx.shadowBlur = 30
-  ctx.fillStyle = '#0a0e16'
-  ctx.strokeStyle = '#f87171'
-  ctx.lineWidth = 1.5
-  roundRect(ctx, panelX, titleY - 18, panelW, 36, 4)
-  ctx.fill()
-  ctx.stroke()
-  ctx.shadowBlur = 0
-  ctx.fillStyle = '#f87171'
-  ctx.font = `bold 18px 'JetBrains Mono', monospace`
-  ctx.fillText('GAME OVER', cx, titleY)
+  // ─── Stats line (top) ───
+  ctx.fillStyle = '#4a5568'
+  ctx.font = `12px 'JetBrains Mono', monospace`
+  ctx.fillText(`${s.wordsBroken} words broken  ·  Chapter ${s.chapterIdx + 1} of ${s.book.title}`, cx, H * 0.14)
 
-  // ─── New high score badge ───
-  let yOff = titleY + 32
+  // ─── GAME OVER (centered) ───
+  ctx.fillStyle = '#f87171'
+  ctx.font = `bold 36px 'JetBrains Mono', monospace`
+  ctx.fillText('GAME OVER', cx, H * 0.30)
+
+  // ─── New high score ───
   if (s.isNewHigh) {
-    ctx.shadowColor = '#e8c44a'
-    ctx.shadowBlur = 20
     ctx.fillStyle = '#e8c44a'
     ctx.font = `bold 13px 'JetBrains Mono', monospace`
-    ctx.fillText('★  NEW HIGH SCORE  ★', cx, yOff)
-    ctx.shadowBlur = 0
-    yOff += 24
+    ctx.fillText('NEW HIGH SCORE', cx, H * 0.37)
   }
 
-  // ─── Book info ───
-  ctx.fillStyle = '#4a5568'
-  ctx.font = `12px 'JetBrains Mono', monospace`
-  ctx.fillText(`${s.book.title}  ·  Chapter ${s.chapterIdx + 1}`, cx, yOff)
-  yOff += 28
+  // ─── Final score ───
+  ctx.fillStyle = '#5a6578'
+  ctx.font = `bold 10px 'JetBrains Mono', monospace`
+  ctx.fillText('FINAL SCORE', cx, H * 0.44)
 
-  // ─── Score panel ───
-  ctx.fillStyle = '#0a0e16'
-  ctx.strokeStyle = '#e8c44a'
-  ctx.lineWidth = 2
-  ctx.shadowColor = '#e8c44a'
-  ctx.shadowBlur = 16
-  roundRect(ctx, panelX + 40, yOff - 4, panelW - 80, 56, 4)
-  ctx.fill()
-  ctx.stroke()
-  ctx.shadowBlur = 0
-
-  ctx.fillStyle = '#4a5568'
-  ctx.font = `bold 9px 'JetBrains Mono', monospace`
-  ctx.letterSpacing = '2px'
-  ctx.fillText('FINAL SCORE', cx, yOff + 10)
   ctx.fillStyle = '#e8c44a'
-  ctx.font = `bold 26px 'JetBrains Mono', monospace`
-  ctx.fillText(s.score.toLocaleString(), cx, yOff + 36)
-  yOff += 72
+  ctx.font = `bold 32px 'JetBrains Mono', monospace`
+  ctx.fillText(s.score.toLocaleString(), cx, H * 0.50)
 
-  // ─── Stats row ───
-  ctx.fillStyle = '#0a0e16'
-  ctx.strokeStyle = '#1a2030'
-  ctx.lineWidth = 1
-  roundRect(ctx, panelX, yOff - 4, panelW, 34, 4)
-  ctx.fill()
-  ctx.stroke()
-  ctx.fillStyle = '#7a8598'
-  ctx.font = `12px 'JetBrains Mono', monospace`
-  ctx.fillText(`${s.wordsBroken} words  ·  ${s.chapterIdx} chapters`, cx, yOff + 13)
-  yOff += 48
+  // ─── High score ───
+  const topScore = s.endScores.length > 0 ? s.endScores[0] : 0
+  ctx.fillStyle = '#5a6578'
+  ctx.font = `bold 10px 'JetBrains Mono', monospace`
+  ctx.fillText('HIGH SCORE', cx, H * 0.58)
 
-  // ─── Top 3 panel ───
-  const hasScores = s.endScores.length > 0
-  if (hasScores) {
-    ctx.fillStyle = '#0a0e16'
-    ctx.strokeStyle = '#1a2030'
-    ctx.lineWidth = 1
-    const scoresPanelH = 24 + s.endScores.length * 28
-    roundRect(ctx, panelX, yOff - 4, panelW, scoresPanelH, 4)
-    ctx.fill()
-    ctx.stroke()
+  ctx.fillStyle = '#c8d0dc'
+  ctx.font = `bold 20px 'JetBrains Mono', monospace`
+  ctx.fillText(topScore.toLocaleString(), cx, H * 0.63)
 
+  // ─── Top scores (bottom) ───
+  if (s.endScores.length > 1) {
     ctx.fillStyle = '#374151'
-    ctx.font = `bold 9px 'JetBrains Mono', monospace`
-    ctx.fillText('TOP SCORES', cx, yOff + 8)
+    ctx.font = `bold 10px 'JetBrains Mono', monospace`
+    ctx.fillText('TOP SCORES', cx, H * 0.73)
 
     const medals = ['#e8c44a', '#a0aab8', '#cd7f32']
     for (let i = 0; i < Math.min(3, s.endScores.length); i++) {
       const sc = s.endScores[i]
-      const y = yOff + 26 + i * 28
+      const y = H * 0.78 + i * 24
       const isCurrent = sc === s.score && i === s.endScores.indexOf(s.score)
 
-      // Medal dot
-      ctx.fillStyle = medals[i]
-      ctx.beginPath()
-      ctx.arc(cx - 60, y, 4, 0, Math.PI * 2)
-      ctx.fill()
-
-      // Score
-      ctx.fillStyle = isCurrent ? '#e8c44a' : '#c8d0dc'
-      ctx.font = `bold 14px 'JetBrains Mono', monospace`
-      ctx.textAlign = 'left'
-      ctx.fillText(sc.toLocaleString(), cx - 45, y)
-
-      // Current marker
-      if (isCurrent) {
-        ctx.fillStyle = '#e8c44a'
-        ctx.font = `10px 'JetBrains Mono', monospace`
-        ctx.textAlign = 'right'
-        ctx.fillText('◄ YOU', cx + panelW / 2 - 16, y)
-      }
+      ctx.fillStyle = medals[i] ?? '#5a6578'
+      ctx.font = `bold 13px 'JetBrains Mono', monospace`
       ctx.textAlign = 'center'
+      ctx.fillText(`${i + 1}.  ${sc.toLocaleString()}${isCurrent ? '  ◄' : ''}`, cx, y)
     }
-    yOff += scoresPanelH + 20
   }
 
   // ─── Restart prompt ───
-  ctx.fillStyle = '#0a0e16'
-  ctx.strokeStyle = '#7dd3fc'
-  ctx.lineWidth = 1
-  ctx.shadowColor = '#7dd3fc'
-  ctx.shadowBlur = 10
-  const promptW = 280
-  roundRect(ctx, cx - promptW / 2, yOff - 2, promptW, 28, 4)
-  ctx.fill()
-  ctx.stroke()
-  ctx.shadowBlur = 0
+  ctx.textAlign = 'center'
   ctx.fillStyle = '#7dd3fc'
-  ctx.font = `bold 11px 'JetBrains Mono', monospace`
-  ctx.fillText('CLICK or SPACE to restart', cx, yOff + 12)
+  ctx.font = `bold 13px 'JetBrains Mono', monospace`
+  ctx.fillText('[ CLICK or SPACE to restart ]', cx, H * 0.92)
 }
 
 // ── Overlay: Level Complete ────────────────────────────────────

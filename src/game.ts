@@ -6,7 +6,7 @@ import { scoreWord, getHighScores, saveHighScore } from './scoring'
 export { getTopScore } from './scoring'
 import { TAG_COLORS, wordColor, setActiveTagMap } from './colors'
 import { sidebarEls, initLetterGrid } from './sidebar'
-import { renderGameOver, renderLevelComplete, renderPenalty, renderPause } from './renderer'
+import { renderGameOver, renderPause } from './renderer'
 import { updateBalls, type PhysicsState } from './physics'
 import { activateUpgrade as runActivateUpgrade, hitBrick as runHitBrick, type UpgradeState } from './upgrades'
 import { renderGame, type RenderState } from './render-game'
@@ -66,7 +66,7 @@ export class Game {
   private safetyX = 0          // current X position
   private safetyDir = 1        // 1 = right, -1 = left
   private safetyW = 80
-  private safetyH = 10
+  private safetyH = 20
   private safetyY = 20         // above the main paddle
 
   // slow upgrade
@@ -88,16 +88,19 @@ export class Game {
   private lives = 3
   private alphabetCompletions = 0
 
-  // level complete animation
+  // end-of-chapter sequence
   private levelWords: { word: string; color: string; points: number }[] = []
-  private levelState: 'playing' | 'animating' | 'waiting' | 'penalty' | 'penaltyWait' = 'playing'
-  private levelAnimTimer = 0
-  private levelAnimIdx = 0
-  private levelAnimScore = 0
-  private penaltyBricks: { word: string; color: string; points: number }[] = []
-  private penaltyTimer = 0
-  private penaltyIdx = 0
-  private penaltyTotal = 0
+  private levelState: 'playing' | 'endPopping' | 'endTally' | 'endGrade' = 'playing'
+  private endTimer = 0
+  private endPopIdx = 0          // which brick we're popping
+  private endPopBricks: Brick[] = []  // remaining alive bricks to pop
+  private endTallyIdx = 0        // which scored word we're tallying
+  private endTallyScore = 0      // running tally of scored words
+  private endPenaltyTotal = 0    // total deduction for missed words
+  private endPenaltyShown = false
+  private endGrade = ''
+  private endTotalWords = 0
+  private endBrokenWords = 0
 
   // high scores (set on game over)
   private endScores: number[] = []
@@ -142,11 +145,17 @@ export class Game {
     this.canvas.addEventListener('click', () => {
       if (this.gameOver) {
         this.restart()
-      } else if (this.levelState === 'waiting' || this.levelState === 'penaltyWait') {
-        this.levelState = 'playing'
-        this.levelWords = []
-        this.penaltyBricks = []
-        this.advanceChapter()
+      } else if (this.levelState === 'endGrade' && this.endTimer > 1.0) {
+        if (this.lives <= 0 || this.endGrade === 'D' || this.endGrade === 'F') {
+          this.gameOver = true
+          const prevTop = getHighScores(this.book.title)[0] ?? 0
+          this.endScores = saveHighScore(this.book.title, this.score)
+          this.isNewHigh = this.score > 0 && this.score >= prevTop
+        } else {
+          this.levelState = 'playing'
+          this.levelWords = []
+          this.advanceChapter()
+        }
       } else if (this.paused) {
         this.paused = false
       } else {
@@ -223,11 +232,11 @@ export class Game {
     }
     const equals = '═'.repeat(hits)
     this.safetyLabel = `${equals} SAFETY ${equals}`
-    const font = `bold 11px 'JetBrains Mono', 'Courier New', monospace`
+    const font = `bold ${this.safetyH - 5}px 'JetBrains Mono', 'Courier New', monospace`
     const prepared = prepareWithSegments(this.safetyLabel, font)
     const result = layoutWithLines(prepared, 9999, this.safetyH)
     const textW = result.lines.length > 0 ? result.lines[0].width : this.safetyLabel.length * 7
-    this.safetyW = textW + 16
+    this.safetyW = textW + 28
   }
 
   // ── Chapter / Brick loading ─────────────────────────────────
@@ -333,51 +342,93 @@ export class Game {
       return
     }
 
-    // Level complete animation
-    if (this.levelState === 'animating') {
-      this.levelAnimTimer += dt
-      // Show one word every 0.06s for fast count-up
-      const wordsPerSec = 16
-      const targetIdx = Math.floor(this.levelAnimTimer * wordsPerSec)
-      while (this.levelAnimIdx < this.levelWords.length && this.levelAnimIdx < targetIdx) {
-        this.levelAnimScore += this.levelWords[this.levelAnimIdx].points
-        this.levelAnimIdx++
+    // ── End-of-chapter sequence (all in-field, no overlays) ──
+
+    // Phase 1: Pop remaining bricks one by one
+    if (this.levelState === 'endPopping') {
+      this.endTimer += dt
+      const popsPerSec = 8
+      const targetIdx = Math.floor(this.endTimer * popsPerSec)
+      while (this.endPopIdx < this.endPopBricks.length && this.endPopIdx < targetIdx) {
+        const brick = this.endPopBricks[this.endPopIdx]
+        brick.alive = false
+        // Red explosion particles
+        const bsy = brick.y - this.bricksScrollY
+        for (let i = 0; i < brick.word.length; i++) {
+          this.particles.push({
+            x: brick.x + (i / brick.word.length) * brick.w + 8,
+            y: bsy + brick.h / 2,
+            vx: (Math.random() - 0.5) * 200,
+            vy: (Math.random() - 0.8) * 180,
+            char: brick.word[i],
+            life: 1.0, maxLife: 1.2,
+            color: '#f87171', size: 16,
+          })
+        }
+        this.endPopIdx++
       }
-      // When all words shown, pause then move to waiting
-      if (this.levelAnimIdx >= this.levelWords.length && this.levelAnimTimer > this.levelWords.length / wordsPerSec + 1.5) {
-        this.levelState = 'waiting'
-      }
-      return
-    }
-    if (this.levelState === 'waiting') {
-      if (this.keysDown.has(' ') || this.keysDown.has('Enter')) {
-        this.levelState = 'playing'
-        this.levelWords = []
-        this.advanceChapter()
-      }
-      return
-    }
-    // Penalty animation — bricks break one by one, score drains
-    if (this.levelState === 'penalty') {
-      this.penaltyTimer += dt
-      const wordsPerSec = 12
-      const targetIdx = Math.floor(this.penaltyTimer * wordsPerSec)
-      while (this.penaltyIdx < this.penaltyBricks.length && this.penaltyIdx < targetIdx) {
-        this.penaltyTotal += this.penaltyBricks[this.penaltyIdx].points
-        this.penaltyIdx++
-      }
-      if (this.penaltyIdx >= this.penaltyBricks.length && this.penaltyTimer > this.penaltyBricks.length / wordsPerSec + 1.0) {
-        // Deduct from score (floor at 0)
-        this.score = Math.max(0, this.score - this.penaltyTotal)
-        this.levelState = 'penaltyWait'
+      // Tick particles + fade bricks
+      this.tickParticlesAndFade(dt)
+      // When done popping, move to tally
+      if (this.endPopIdx >= this.endPopBricks.length && this.endTimer > this.endPopBricks.length / popsPerSec + 0.5) {
+        this.levelState = 'endTally'
+        this.endTimer = 0
       }
       return
     }
-    if (this.levelState === 'penaltyWait') {
-      if (this.keysDown.has(' ') || this.keysDown.has('Enter')) {
-        this.levelState = 'playing'
-        this.penaltyBricks = []
-        this.advanceChapter()
+
+    // Phase 2: Score tally — count up broken words, then deduct missed
+    if (this.levelState === 'endTally') {
+      this.endTimer += dt
+      const tallyPerSec = 16
+      const targetIdx = Math.floor(this.endTimer * tallyPerSec)
+      while (this.endTallyIdx < this.levelWords.length && this.endTallyIdx < targetIdx) {
+        this.endTallyScore += this.levelWords[this.endTallyIdx].points
+        this.endTallyIdx++
+      }
+      // After tally finishes, show penalty deduction then move to grade
+      const tallyDone = this.endTallyIdx >= this.levelWords.length
+      const tallyEndTime = this.levelWords.length / tallyPerSec + 0.8
+      if (tallyDone && !this.endPenaltyShown && this.endTimer > tallyEndTime) {
+        // Deduct penalty for missed words
+        const missed = this.endTotalWords - this.endBrokenWords
+        this.endPenaltyTotal = missed * 50
+        this.score = Math.max(0, this.score - this.endPenaltyTotal)
+        this.endPenaltyShown = true
+      }
+      if (tallyDone && this.endPenaltyShown && this.endTimer > tallyEndTime + 1.5) {
+        // Calculate grade
+        const pct = this.endTotalWords > 0 ? this.endBrokenWords / this.endTotalWords : 0
+        if (pct >= 1.0) this.endGrade = 'S'
+        else if (pct >= 0.90) this.endGrade = 'A'
+        else if (pct >= 0.75) this.endGrade = 'B'
+        else if (pct >= 0.60) this.endGrade = 'C'
+        else if (pct >= 0.40) this.endGrade = 'D'
+        else this.endGrade = 'F'
+        this.levelState = 'endGrade'
+        this.endTimer = 0
+      }
+      this.tickParticlesAndFade(dt)
+      this.sidebarTimer -= dt
+      if (this.sidebarTimer <= 0) { this.updateSidebar(); this.sidebarTimer = 0.1 }
+      return
+    }
+
+    // Phase 3: Grade shown (or game over tally done) — wait for input
+    if (this.levelState === 'endGrade') {
+      this.endTimer += dt
+      this.tickParticlesAndFade(dt)
+      if (this.endTimer > 1.0 && (this.keysDown.has(' ') || this.keysDown.has('Enter'))) {
+        if (this.lives <= 0 || this.endGrade === 'D' || this.endGrade === 'F') {
+          this.gameOver = true
+          const prevTop = getHighScores(this.book.title)[0] ?? 0
+          this.endScores = saveHighScore(this.book.title, this.score)
+          this.isNewHigh = this.score > 0 && this.score >= prevTop
+        } else {
+          this.levelState = 'playing'
+          this.levelWords = []
+          this.advanceChapter()
+        }
       }
       return
     }
@@ -433,34 +484,18 @@ export class Game {
         this.spawnMoreBricks()
       }
 
-      // Level clear: all words placed and all bricks broken → start animation
+      // Level clear: all words placed and all bricks broken
       if (this.levelState === 'playing' && this.wordCursor >= this.wordsInChapter.length && !this.bricks.some(b => b.alive)) {
-        this.levelState = 'animating'
-        this.levelAnimTimer = 0
-        this.levelAnimIdx = 0
-        this.levelAnimScore = 0
-        // Stick the ball
-        for (const ball of this.balls) { ball.stuck = true; ball.trail = [] }
+        this.startEndSequence()
       }
 
-      // Check if bricks reached the top wall (blue line) → penalty
-      for (const b of this.bricks) {
-        if (b.alive && b.y - this.bricksScrollY < 5) {
-          // Collect all remaining alive bricks for penalty
-          this.penaltyBricks = []
-          for (const brick of this.bricks) {
-            if (brick.alive) {
-              this.penaltyBricks.push({ word: brick.word, color: brick.color, points: brick.points })
-              brick.alive = false
-            }
+      // Bricks reached the top wall → end sequence with remaining bricks
+      if (this.levelState === 'playing') {
+        for (const b of this.bricks) {
+          if (b.alive && b.y - this.bricksScrollY < 5) {
+            this.startEndSequence()
+            break
           }
-          this.penaltyTimer = 0
-          this.penaltyIdx = 0
-          this.penaltyTotal = 0
-          this.levelState = 'penalty'
-          // Stick ball
-          for (const ball of this.balls) { ball.stuck = true; ball.trail = [] }
-          break
         }
       }
     }
@@ -499,10 +534,7 @@ export class Game {
           this.multiplier = 1.0
           this.lives--
           if (this.lives <= 0) {
-            this.gameOver = true
-            const prevTop = getHighScores(this.book.title)[0] ?? 0
-            this.endScores = saveHighScore(this.book.title, this.score)
-            this.isNewHigh = this.score > 0 && this.score >= prevTop
+            this.startEndSequence()
           }
         } else {
           if (ev.index >= 0) this.balls.splice(ev.index, 1)
@@ -592,6 +624,36 @@ export class Game {
       this.updateSidebar()
       this.sidebarTimer = 0.1
     }
+  }
+
+  private tickParticlesAndFade(dt: number) {
+    for (let i = this.particles.length - 1; i >= 0; i--) {
+      const p = this.particles[i]
+      p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 120 * dt; p.life -= dt
+      if (p.life <= 0) this.particles.splice(i, 1)
+    }
+    for (const b of this.bricks) {
+      if (!b.alive && b.alpha > 0) {
+        b.alpha -= dt * 4
+        if (b.alpha < 0) b.alpha = 0
+      }
+    }
+  }
+
+  private startEndSequence() {
+    // Collect remaining alive bricks to pop
+    this.endPopBricks = this.bricks.filter(b => b.alive)
+    this.endPopIdx = 0
+    this.endTallyIdx = 0
+    this.endTallyScore = 0
+    this.endPenaltyTotal = 0
+    this.endPenaltyShown = false
+    this.endGrade = ''
+    this.endTimer = 0
+    this.endTotalWords = this.totalWordsInChapter
+    this.endBrokenWords = this.wordsBroken
+    this.levelState = this.endPopBricks.length > 0 ? 'endPopping' : 'endTally'
+    for (const ball of this.balls) { ball.stuck = true; ball.trail = [] }
   }
 
   private spawnMoreBricks() {
@@ -770,24 +832,118 @@ export class Game {
     }
     renderGame(ctx, W, H, renderState)
 
-    // Level complete animation overlay
-    if (this.levelState === 'animating' || this.levelState === 'waiting') {
-      renderLevelComplete(ctx, W, H, {
-        levelWords: this.levelWords,
-        levelAnimIdx: this.levelAnimIdx,
-        levelAnimScore: this.levelAnimScore,
-        isWaiting: this.levelState === 'waiting',
-      })
+    // End-of-chapter in-field UI
+    if (this.levelState === 'endPopping') {
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillStyle = '#f87171'
+      ctx.font = `bold 16px 'JetBrains Mono', monospace`
+      ctx.fillText(`${this.endPopIdx} / ${this.endPopBricks.length} remaining`, W / 2, H / 2)
     }
 
-    // Penalty overlay — bricks reached the top
-    if (this.levelState === 'penalty' || this.levelState === 'penaltyWait') {
-      renderPenalty(ctx, W, H, {
-        penaltyBricks: this.penaltyBricks,
-        penaltyIdx: this.penaltyIdx,
-        penaltyTotal: this.penaltyTotal,
-        isWaiting: this.levelState === 'penaltyWait',
-      })
+    if (this.levelState === 'endTally') {
+      // Semi-transparent backdrop so text is readable
+      ctx.fillStyle = 'rgba(6, 8, 12, 0.75)'
+      ctx.fillRect(0, H * 0.2, W, H * 0.6)
+
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+
+      // Chapter title
+      ctx.fillStyle = '#e8c44a'
+      ctx.font = `bold 22px 'JetBrains Mono', monospace`
+      ctx.fillText('CHAPTER COMPLETE', W / 2, H * 0.28)
+
+      // Scrolling word tally — show last few words rapidly
+      ctx.font = `13px 'JetBrains Mono', monospace`
+      const showCount = 6
+      const startIdx = Math.max(0, this.endTallyIdx - showCount)
+      for (let i = startIdx; i < this.endTallyIdx && i < this.levelWords.length; i++) {
+        const w = this.levelWords[i]
+        const row = i - startIdx
+        const y = H * 0.34 + row * 18
+        const isNewest = i === this.endTallyIdx - 1
+        ctx.globalAlpha = isNewest ? 1.0 : 0.3
+        ctx.fillStyle = w.color
+        ctx.textAlign = 'right'
+        ctx.fillText(w.word, W / 2 - 15, y)
+        ctx.fillStyle = '#e8c44a'
+        ctx.textAlign = 'left'
+        ctx.fillText(`+${w.points}`, W / 2 + 15, y)
+      }
+      ctx.globalAlpha = 1
+      ctx.textAlign = 'center'
+
+      // Running score
+      ctx.fillStyle = '#e8c44a'
+      ctx.shadowColor = '#e8c44a'
+      ctx.shadowBlur = 10
+      ctx.font = `bold 28px 'JetBrains Mono', monospace`
+      ctx.fillText(this.endTallyScore.toLocaleString(), W / 2, H * 0.56)
+      ctx.shadowBlur = 0
+
+      // Penalty deduction (shown after tally finishes)
+      if (this.endPenaltyShown && this.endPenaltyTotal > 0) {
+        ctx.fillStyle = '#f87171'
+        ctx.shadowColor = '#f87171'
+        ctx.shadowBlur = 8
+        ctx.font = `bold 20px 'JetBrains Mono', monospace`
+        const missed = this.endTotalWords - this.endBrokenWords
+        ctx.fillText(`-${this.endPenaltyTotal.toLocaleString()}  (${missed} missed)`, W / 2, H * 0.64)
+        ctx.shadowBlur = 0
+      }
+
+      // Word count
+      ctx.fillStyle = '#5a6578'
+      ctx.font = `12px 'JetBrains Mono', monospace`
+      ctx.fillText(`${this.endBrokenWords} / ${this.endTotalWords} words broken`, W / 2, H * 0.72)
+    }
+
+    if (this.levelState === 'endGrade') {
+      ctx.fillStyle = 'rgba(6, 8, 12, 0.75)'
+      ctx.fillRect(0, H * 0.2, W, H * 0.6)
+
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+
+      const isDead = this.lives <= 0
+
+      // Final score
+      ctx.fillStyle = '#e8c44a'
+      ctx.font = `bold 22px 'JetBrains Mono', monospace`
+      ctx.fillText(`SCORE: ${this.score.toLocaleString()}`, W / 2, H * 0.32)
+
+      if (isDead) {
+        // No letter grade — just show word count and continue prompt
+        ctx.fillStyle = '#5a6578'
+        ctx.font = `14px 'JetBrains Mono', monospace`
+        ctx.fillText(`${this.endBrokenWords} / ${this.endTotalWords} words broken`, W / 2, H * 0.42)
+      } else {
+        // Letter grade
+        const gradeColors: Record<string, string> = {
+          S: '#fbbf24', A: '#4ade80', B: '#7dd3fc', C: '#c084fc', D: '#f97316', F: '#f87171',
+        }
+        ctx.fillStyle = gradeColors[this.endGrade] ?? '#c8d0dc'
+        ctx.font = `bold 72px 'JetBrains Mono', monospace`
+        ctx.fillText(this.endGrade, W / 2, H * 0.48)
+
+        ctx.fillStyle = '#5a6578'
+        ctx.font = `14px 'JetBrains Mono', monospace`
+        ctx.fillText(`${this.endBrokenWords} / ${this.endTotalWords} words`, W / 2, H * 0.58)
+      }
+
+      // Prompt
+      if (this.endTimer > 1.0) {
+        const isFail = isDead || this.endGrade === 'D' || this.endGrade === 'F'
+        ctx.fillStyle = isFail ? '#f87171' : '#7dd3fc'
+        ctx.font = `bold 14px 'JetBrains Mono', monospace`
+        ctx.fillText(
+          isDead ? '[ CLICK or SPACE to continue ]' :
+          isFail ? '[ CLICK or SPACE to restart ]' :
+          '[ CLICK or SPACE for next chapter ]',
+          W / 2, H * 0.68,
+        )
+      }
     }
 
     // Game over overlay
