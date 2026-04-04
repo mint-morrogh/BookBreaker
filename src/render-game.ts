@@ -26,6 +26,8 @@ export interface RenderState {
   freezeTimer: number
   charge: number
   started: boolean
+  hasLaunched: boolean
+  hasRecalled: boolean
   levelState: string
 }
 
@@ -320,8 +322,8 @@ export function renderGame(
     }
   }
 
-  // Launch hint
-  if (!state.started && state.levelState === 'playing') {
+  // Launch hint — only shown until first launch
+  if (!state.started && !state.hasLaunched && state.levelState === 'playing') {
     ctx.fillStyle = '#4a5568'
     ctx.font = `14px 'JetBrains Mono', monospace`
     ctx.textAlign = 'center'
@@ -329,15 +331,15 @@ export function renderGame(
     ctx.fillText('[ CLICK or SPACE to launch ]', W / 2, state.paddleY + 60)
   }
 
-  // Charge recall hint
-  if (state.charge >= 1.0 && state.started && state.levelState === 'playing') {
+  // Charge recall hint — only shown until first recall
+  if (state.charge >= 1.0 && state.started && !state.hasRecalled && state.levelState === 'playing') {
     ctx.fillStyle = '#fbbf24'
     ctx.shadowColor = '#fbbf24'
     ctx.shadowBlur = 8
     ctx.font = `bold 13px 'JetBrains Mono', monospace`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
-    ctx.fillText('[ CLICK to recall ball ]', W / 2, state.paddleY + 60)
+    ctx.fillText('[ RIGHT CLICK to recall ball ]', W / 2, state.paddleY + 60)
     ctx.shadowBlur = 0
   }
 }

@@ -129,22 +129,20 @@ export function updateBalls(
       ball.vx = Math.cos(angle) * speed
       ball.vy = Math.sin(angle) * speed  // positive = downward
 
-      // No free pierce — must earn it with a slam
+      // Slam detection — purely positional: how close is the paddle to max extension?
+      // Cooldown on release prevents spam; holding at front is a valid but risky strategy.
+      const maxY = state.paddleBaseY + state.paddleExtentMax
+      const distFromMax = maxY - state.paddleY  // 0 = fully extended, 55 = at rest
 
-      // Slam detection — paddle must be actively pushing DOWN + extended toward the ball
-      // extension: 0 = resting at top, 1 = fully extended to bottom limit
-      const extension = state.paddleExtentMax > 0
-        ? (state.paddleY - state.paddleBaseY) / state.paddleExtentMax
-        : 0
-      if (state.paddleVy > 80 && extension > 0.4) {
-        // Pierce tier scales with both velocity and extension
+      if (distFromMax < 18) {
+        // Tight windows — distance from the max extension line
         let slamTier: number
-        if (state.paddleVy > 250 && extension > 0.85) {
-          slamTier = 3  // perfect slam — fast + fully extended
-        } else if (state.paddleVy > 150 && extension > 0.6) {
-          slamTier = 2  // solid slam
+        if (distFromMax < 4) {
+          slamTier = 3  // PERFECT — right at the line
+        } else if (distFromMax < 10) {
+          slamTier = 2  // GREAT — close
         } else {
-          slamTier = 1  // decent slam
+          slamTier = 1  // GOOD — decent
         }
         ball.pierceLeft = slamTier
 

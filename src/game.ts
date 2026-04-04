@@ -116,11 +116,14 @@ export class Game {
 
   // input
   private mouseX = -1
-  private mouseY = -1
+  private mouseDown = false   // left click held = paddle pushes forward
+  private slamCooldown = 0    // seconds until next slam allowed
   private keysDown = new Set<string>()
 
   // state
   private started = false
+  private hasLaunched = false    // true after first launch this run
+  private hasRecalled = false    // true after first recall this run
   private gameOver = false
   private paused = false
   private sidebarTimer = 0
@@ -152,7 +155,6 @@ export class Game {
     window.addEventListener('mousemove', (e) => {
       const rect = this.canvas.getBoundingClientRect()
       this.mouseX = (e.clientX - rect.left) / rect.width * VIRTUAL_W
-      this.mouseY = (e.clientY - rect.top) / rect.height * VIRTUAL_H
     })
     window.addEventListener('keydown', (e) => {
       this.keysDown.add(e.key)
@@ -162,7 +164,11 @@ export class Game {
       }
     })
     window.addEventListener('keyup', (e) => this.keysDown.delete(e.key))
-    this.canvas.addEventListener('click', () => {
+
+    // Left click: hold to push paddle forward, release to snap back
+    // First click when ball is stuck just launches (no paddle push)
+    this.canvas.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return
       if (this.gameOver) {
         this.restart()
       } else if (this.levelState === 'endGrade' && this.endTimer > 1.0) {
@@ -178,10 +184,26 @@ export class Game {
         }
       } else if (this.paused) {
         this.paused = false
-      } else if (this.charge >= 1.0 && this.balls.some(b => !b.stuck)) {
-        this.recallBall()
-      } else {
+      } else if (this.balls.some(b => b.stuck)) {
+        // Ball is stuck — launch it, don't push paddle
         this.launchBalls()
+      } else {
+        // Ball is in play — hold to push paddle forward (if not on cooldown)
+        if (this.slamCooldown <= 0) this.mouseDown = true
+      }
+    })
+    window.addEventListener('mouseup', (e) => {
+      if (e.button === 0 && this.mouseDown) {
+        this.mouseDown = false
+        this.slamCooldown = 0.3  // brief cooldown after release
+      }
+    })
+
+    // Right click: recall ball
+    this.canvas.addEventListener('contextmenu', (e) => {
+      e.preventDefault()
+      if (this.charge >= 1.0 && this.balls.some(b => !b.stuck)) {
+        this.recallBall()
       }
     })
 
@@ -363,6 +385,7 @@ export class Game {
         ball.vx = Math.cos(angle) * this.ballSpeed
         ball.vy = Math.sin(angle) * this.ballSpeed
         this.started = true
+        this.hasLaunched = true
       }
     }
   }
@@ -370,6 +393,7 @@ export class Game {
   private recallBall() {
     const ball = this.balls.find(b => !b.stuck)
     if (!ball) return
+    this.hasRecalled = true
 
     // Check if path to paddle is clear — raycast for bricks in the way
     const targetX = this.paddleX + this.paddleW / 2
@@ -548,10 +572,9 @@ export class Game {
     this.paddleTargetX = Math.max(0, Math.min(this.W - this.paddleW, this.paddleTargetX))
     this.paddleX += (this.paddleTargetX - this.paddleX) * Math.min(1, dt * 18)
 
-    // Paddle movement — vertical (mouse controls Y within range)
-    if (this.mouseY >= 0) {
-      this.paddleTargetY = Math.max(this.paddleBaseY, Math.min(this.paddleBaseY + 55, this.mouseY - this.paddleH / 2))
-    }
+    // Paddle movement — vertical: left click pushes forward, release snaps back
+    if (this.slamCooldown > 0) this.slamCooldown -= dt
+    this.paddleTargetY = this.mouseDown ? this.paddleBaseY + 55 : this.paddleBaseY
     this.paddleY += (this.paddleTargetY - this.paddleY) * Math.min(1, dt * 18)
     this.paddleVy = (this.paddleY - this.prevPaddleY) / Math.max(dt, 0.001)
     this.prevPaddleY = this.paddleY
@@ -793,6 +816,7 @@ export class Game {
       const s = this.shrapnel[i]
       s.x += s.vx * dt
       s.y += s.vy * dt
+      s.vy += 200 * dt  // gravity — arcs out then falls back down
       s.life -= dt
       if (s.life <= 0 || s.x < 0 || s.x > this.W || s.y < 0 || s.y > this.H) {
         this.shrapnel.splice(i, 1)
@@ -914,7 +938,7 @@ export class Game {
 
   private detectIslands() {
     const alive = this.bricks.filter(b => b.alive && b.breakOff === 0)
-    if (alive.length < 2) return
+    if (alive.length === 0) return
 
     // Adjacency: two bricks are neighbors if close in Y (within row gap) and overlapping in X
     const rowGap = 35  // roughly brickLineH + gapY + tolerance
@@ -956,17 +980,32 @@ export class Game {
       groups.get(root)!.push(b)
     }
 
-    if (groups.size <= 1) return  // only one group, nothing to break off
+    // If there's only 1 group, it's only an island if bricks have been broken
+    // (i.e. it's a remnant, not the full intact paragraph)
+    const totalPlaced = this.bricks.length
+    const totalAliveIncBreakOff = this.bricks.filter(b => b.alive).length
+    if (groups.size <= 1 && totalAliveIncBreakOff === totalPlaced) return  // full intact paragraph
 
-    // Find the largest group (main body)
-    let mainGroup: Brick[] = []
+    // Find the largest group (main body) — but only treat it as "main" if it's
+    // strictly larger than the others. If all groups are the same size, they all break off.
+    let mainGroup: Brick[] | null = null
+    let maxLen = 0
+    let secondMaxLen = 0
     for (const g of groups.values()) {
-      if (g.length > mainGroup.length) mainGroup = g
+      if (g.length > maxLen) {
+        secondMaxLen = maxLen
+        maxLen = g.length
+        mainGroup = g
+      } else if (g.length > secondMaxLen) {
+        secondMaxLen = g.length
+      }
     }
+    // If the "largest" is the same size as the runner-up, there's no main body — all break off
+    if (maxLen === secondMaxLen) mainGroup = null
 
     // All other groups are islands — flag them for break-off as unified icebergs
     // Cap at 5 bricks: larger chunks just keep floating, no free break-off bonus
-    const mainSet = new Set(mainGroup)
+    const mainSet = mainGroup ? new Set(mainGroup) : new Set<Brick>()
     for (const g of groups.values()) {
       if (g === mainGroup) continue
       if (g.length > 5) continue  // too big — stays as normal bricks
@@ -1209,6 +1248,8 @@ export class Game {
       freezeTimer: this.freezeTimer,
       charge: this.charge,
       started: this.started,
+      hasLaunched: this.hasLaunched,
+      hasRecalled: this.hasRecalled,
       levelState: this.levelState,
     }
     renderGame(ctx, W, H, renderState)
