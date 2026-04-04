@@ -1,12 +1,12 @@
 # BookBreaker
 
-A text-rendered brick breaker game that turns classic literature into an arcade experience. Every element — paddle, ball, bricks, particles — is drawn with text characters on an HTML Canvas. Words from real book chapters rise from the bottom as bricks; smash them to score points based on Scrabble-style letter values.
+A text-rendered brick breaker game that turns classic literature into an arcade experience. Every element (paddle, ball, bricks, particles) is drawn with text characters on an HTML Canvas. Words from real book chapters rise from the bottom as bricks; smash them to score points based on Scrabble-style letter values.
 
 Built on [`@chenglou/pretext`](https://github.com/chenglou/pretext), a precise text measurement library, to ensure pixel-accurate sizing and layout of all text-based game elements at 60fps.
 
 ## How It Works
 
-**The loop:** A paddle sits at the top. A ball launches downward. Rows of words — pulled from actual book chapters — scroll upward from the bottom. Break words by bouncing the ball into them.
+**The loop:** A paddle sits at the top. A ball launches downward. Rows of words pulled from actual book chapters scroll upward from the bottom. Break words by bouncing the ball into them.
 
 **Scoring:** Each letter has a point value (common letters like E = 1pt, rare letters like Z = 10pt), multiplied by word length. Big words (10+ letters) get a 3x bonus. A combo multiplier (up to 10x) rewards consecutive hits and decays over time. Missing words costs 50 points each.
 
@@ -38,10 +38,10 @@ Each book has 3 playable chapters. Words are NLP-tagged using [Compromise](https
 
 The [`@chenglou/pretext`](https://github.com/chenglou/pretext) library provides two key functions:
 
-- **`prepareWithSegments(text, font)`** — Prepares text content for measurement with full font metric analysis
-- **`layoutWithLines(prepared, maxWidth, lineHeight)`** — Computes precise layout dimensions
+- **`prepareWithSegments(text, font)`** prepares text content for measurement with full font metric analysis
+- **`layoutWithLines(prepared, maxWidth, lineHeight)`** computes precise layout dimensions
 
-These are used to accurately size the paddle (based on "BOOK BREAKER" text width), the safety bar, and every word brick — ensuring Canvas `fillText` calls and their bounding boxes match exactly. Standard Canvas `measureText` is inconsistent across browsers; Pretext eliminates that.
+These are used to accurately size the paddle (based on "BOOK BREAKER" text width), the safety bar, and every word brick, ensuring Canvas `fillText` calls and their bounding boxes match exactly. Standard Canvas `measureText` is inconsistent across browsers; Pretext eliminates that.
 
 The game renders at a fixed 900x950 virtual resolution and scales to fit the viewport, avoiding DPR resampling artifacts that cause text shimmer.
 
@@ -50,7 +50,7 @@ The game renders at a fixed 900x950 virtual resolution and scales to fit the vie
 ```
 src/
   main.ts          Book picker UI, game initialization
-  game.ts          Core Game class — state, loop, input
+  game.ts          Core Game class: state, loop, input
   physics.ts       Collision detection (ball/paddle/bricks/walls)
   render-game.ts   Main render pass
   renderer.ts      Canvas utilities, game-over screen
@@ -65,11 +65,11 @@ src/
 
 **Key design choices:**
 
-- **No framework** — Pure TypeScript + Canvas 2D API
-- **Event-driven physics** — `physics.ts` emits `PhysicsEvent` objects; `game.ts` applies them to state
-- **World-space bricks** — Bricks live in world coordinates with a scroll offset, enabling smooth continuous spawning
-- **Throttled DOM updates** — Sidebar refreshes at ~10Hz to minimize reflow
-- **Dot field** — 1000+ background dots repelled by the ball, with force scaling by speed
+- **No framework.** Pure TypeScript + Canvas 2D API
+- **Event-driven physics.** `physics.ts` emits `PhysicsEvent` objects; `game.ts` applies them to state
+- **World-space bricks.** Bricks live in world coordinates with a scroll offset, enabling smooth continuous spawning
+- **Throttled DOM updates.** Sidebar refreshes at ~10Hz to minimize reflow
+- **Dot field.** 1000+ background dots repelled by the ball, with force scaling by speed
 
 ## Controls
 
@@ -90,9 +90,9 @@ Opens at `http://localhost:5173`.
 
 ## Tech Stack
 
-- **TypeScript** — Strict mode, ES2020 target
-- **Vite** — Dev server and bundler
-- **@chenglou/pretext** — Text measurement and layout
-- **Compromise** — NLP part-of-speech tagging
-- **Canvas 2D** — All rendering
-- **localStorage** — High score persistence per book
+- **TypeScript** (strict mode, ES2020 target)
+- **Vite** (dev server and bundler)
+- **@chenglou/pretext** (text measurement and layout)
+- **Compromise** (NLP part-of-speech tagging)
+- **Canvas 2D** (all rendering)
+- **localStorage** (high score persistence per book)
