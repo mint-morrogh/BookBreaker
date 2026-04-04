@@ -25,8 +25,8 @@ export interface Ball {
   r: number
   trail: { x: number; y: number; age: number }[]
   stuck: boolean     // stuck to paddle until launched
-  primary: boolean   // primary ball costs a life when lost
   backWallHits: number  // speed stacks from hitting back wall (max 10)
+  slamStacks: number    // speed stacks from paddle slams (decays on non-slam paddle hits)
   blastCharge: number   // 0 = none, else tier (1-4) = blast radius on next hit
   pierceLeft: number    // 0 = normal bounce, else bricks remaining to pierce through
 }
@@ -40,7 +40,7 @@ export interface Particle {
   size: number
 }
 
-export type UpgradeType = 'widen' | 'multiball' | 'safety' | 'blast' | 'slow' | 'magnet' | 'piercing'
+export type UpgradeType = 'widen' | 'multiball' | 'safety' | 'blast' | 'freeze' | 'piercing'
 
 export interface Pickup {
   label: string
@@ -52,6 +52,12 @@ export interface Pickup {
   tier: number       // 1-4
   color: string
   alive: boolean
+}
+
+export interface Shrapnel {
+  x: number; y: number
+  vx: number; vy: number
+  life: number  // seconds remaining
 }
 
 export interface Dot {

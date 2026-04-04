@@ -20,7 +20,7 @@ BOOKS.forEach((book, idx) => {
   bookList.appendChild(el)
 })
 
-function loadAndStart(bookIdx: number) {
+async function loadAndStart(bookIdx: number) {
   const book = BOOKS[bookIdx]
   const overlay = document.getElementById('loading-overlay')!
   const bar = document.getElementById('loading-bar')!
@@ -32,43 +32,41 @@ function loadAndStart(bookIdx: number) {
   overlay.classList.add('active')
   bookLabel.textContent = book.title
   bar.style.width = '0%'
-  status.textContent = 'classifying words...'
+  status.textContent = 'analyzing parts of speech...'
 
-  // Use setTimeout to let the UI paint the loading screen before blocking on NLP
-  setTimeout(() => {
-    bar.style.width = '40%'
-    status.textContent = 'analyzing parts of speech...'
+  // Async NLP — processes chapter-by-chapter, yields between each
+  const tagMap = await tagBook(book.chapters, (ratio) => {
+    // NLP is ~90% of the work, map 0–1 to 5%–90%
+    const pct = Math.round(5 + ratio * 85)
+    bar.style.width = `${pct}%`
+    const done = Math.round(ratio * book.chapters.length)
+    status.textContent = `analyzing chapter ${done} / ${book.chapters.length}...`
+  })
 
-    setTimeout(() => {
-      const tagMap = tagBook(book.chapters)
-      bar.style.width = '80%'
-      status.textContent = `tagged ${tagMap.size} unique words`
+  bar.style.width = '95%'
+  status.textContent = `tagged ${tagMap.size} unique words`
+  await new Promise(r => setTimeout(r, 200))
 
-      setTimeout(() => {
-        bar.style.width = '100%'
-        status.textContent = 'ready'
+  bar.style.width = '100%'
+  status.textContent = 'ready'
+  await new Promise(r => setTimeout(r, 400))
 
-        setTimeout(() => {
-          overlay.classList.remove('active')
-          document.getElementById('app')!.style.display = 'flex'
+  overlay.classList.remove('active')
+  document.getElementById('app')!.style.display = 'flex'
 
-          const canvas = document.getElementById('game') as HTMLCanvasElement
-          const game = new Game(canvas, bookIdx, tagMap)
+  const canvas = document.getElementById('game') as HTMLCanvasElement
+  const game = new Game(canvas, bookIdx, tagMap)
 
-          let last = 0
-          function loop(time: number) {
-            const dt = Math.min((time - last) / 1000, 0.05)
-            last = time
-            game.update(dt)
-            game.render()
-            requestAnimationFrame(loop)
-          }
-          requestAnimationFrame((time) => {
-            last = time
-            requestAnimationFrame(loop)
-          })
-        }, 400)
-      }, 200)
-    }, 50)
-  }, 50)
+  let last = 0
+  function loop(time: number) {
+    const dt = Math.min((time - last) / 1000, 0.05)
+    last = time
+    game.update(dt)
+    game.render()
+    requestAnimationFrame(loop)
+  }
+  requestAnimationFrame((time) => {
+    last = time
+    requestAnimationFrame(loop)
+  })
 }

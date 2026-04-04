@@ -1,7 +1,7 @@
 import { prepareWithSegments, layoutWithLines } from '@chenglou/pretext'
 import { BOOKS, type Book } from './content'
 import type { WordTag } from './tagger'
-import type { Brick, Ball, Particle, Pickup, Dot } from './types'
+import type { Brick, Ball, Particle, Pickup, Dot, Shrapnel } from './types'
 import { scoreWord, getHighScores, saveHighScore } from './scoring'
 export { getTopScore } from './scoring'
 import { TAG_COLORS, wordColor, setActiveTagMap } from './colors'
@@ -30,6 +30,10 @@ export class Game {
   private paddleH = 20
   private paddleY = 0
   private paddleTargetX = 0
+  private paddleBaseY = 50
+  private paddleTargetY = 50
+  private paddleVy = 0
+  private prevPaddleY = 50
   private paddleText = 'BOOK BREAKER'
   private paddlePadX = 14
 
@@ -57,6 +61,7 @@ export class Game {
 
   // particles
   private particles: Particle[] = []
+  private shrapnel: Shrapnel[] = []
 
   // pickups (falling upgrades)
   private pickups: Pickup[] = []
@@ -70,12 +75,12 @@ export class Game {
   private safetyH = 20
   private safetyY = 20         // above the main paddle
 
-  // slow upgrade
-  private slowTimer = 0           // seconds remaining of slow effect
+  // freeze upgrade
+  private freezeTimer = 0         // seconds remaining of freeze (scroll stops)
   private baseDriftSpeed = 6.4    // normal drift speed
 
-  // magnet upgrade
-  private magnetStrength = 0      // pull strength toward paddle (0 = off)
+  // charge mechanic
+  private charge = 0              // 0-1, fills as bricks break, click to recall ball
 
   // dot field
   private dots: Dot[] = []
@@ -88,6 +93,7 @@ export class Game {
   private letterCounts: Record<string, number> = {}
   private lives = 3
   private alphabetCompletions = 0
+  private nextLifeScore = 10000  // award +1 life every 10k points
 
   // end-of-chapter sequence
   private levelWords: { word: string; color: string; points: number }[] = []
@@ -110,6 +116,7 @@ export class Game {
 
   // input
   private mouseX = -1
+  private mouseY = -1
   private keysDown = new Set<string>()
 
   // state
@@ -145,6 +152,7 @@ export class Game {
     window.addEventListener('mousemove', (e) => {
       const rect = this.canvas.getBoundingClientRect()
       this.mouseX = (e.clientX - rect.left) / rect.width * VIRTUAL_W
+      this.mouseY = (e.clientY - rect.top) / rect.height * VIRTUAL_H
     })
     window.addEventListener('keydown', (e) => {
       this.keysDown.add(e.key)
@@ -170,6 +178,8 @@ export class Game {
         }
       } else if (this.paused) {
         this.paused = false
+      } else if (this.charge >= 1.0 && this.balls.some(b => !b.stuck)) {
+        this.recallBall()
       } else {
         this.launchBalls()
       }
@@ -204,7 +214,10 @@ export class Game {
     this.W = VIRTUAL_W
     this.H = VIRTUAL_H
 
-    this.paddleY = 50
+    this.paddleBaseY = 50
+    this.paddleY = this.paddleBaseY
+    this.paddleTargetY = this.paddleBaseY
+    this.prevPaddleY = this.paddleBaseY
     this.measurePaddle()
     this.brickFontSize = 15
     this.brickLineH = this.brickFontSize + 6
@@ -335,8 +348,8 @@ export class Game {
       r: 7,
       trail: [],
       stuck: true,
-      primary: true,
       backWallHits: 0,
+      slamStacks: 0,
       blastCharge: 0,
       pierceLeft: 0,
     })
@@ -351,6 +364,73 @@ export class Game {
         ball.vy = Math.sin(angle) * this.ballSpeed
         this.started = true
       }
+    }
+  }
+
+  private recallBall() {
+    const ball = this.balls.find(b => !b.stuck)
+    if (!ball) return
+
+    // Check if path to paddle is clear — raycast for bricks in the way
+    const targetX = this.paddleX + this.paddleW / 2
+    const targetY = this.paddleY + this.paddleH / 2
+    const dx = targetX - ball.x
+    const dy = targetY - ball.y
+    const dist = Math.sqrt(dx * dx + dy * dy)
+
+    let pathBlocked = false
+    if (dist > 1) {
+      const steps = Math.ceil(dist / 5)
+      const stepX = dx / steps
+      const stepY = dy / steps
+      for (let i = 0; i <= steps; i++) {
+        const px = ball.x + stepX * i
+        const py = ball.y + stepY * i
+        for (const brick of this.bricks) {
+          if (!brick.alive) continue
+          const by = brick.y - this.bricksScrollY
+          if (px > brick.x && px < brick.x + brick.w && py > by && py < by + brick.h) {
+            pathBlocked = true
+            break
+          }
+        }
+        if (pathBlocked) break
+      }
+    }
+
+    if (pathBlocked) {
+      // Path isn't clear — redirect ball toward paddle, let physics handle the rest
+      const speed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy)
+      const angle = Math.atan2(dy, dx)
+      ball.vx = Math.cos(angle) * speed
+      ball.vy = Math.sin(angle) * speed
+      // Gold flash to show recall was triggered
+      this.particles.push({
+        x: ball.x, y: ball.y,
+        vx: 0, vy: -30,
+        char: '↑ RECALL', life: 0.6, maxLife: 0.6,
+        color: '#fbbf24', size: 12,
+      })
+      this.charge = 0
+    } else {
+      // Clear path — teleport ball home
+      // Gold streak particles along path
+      for (let i = 0; i < 20; i++) {
+        const t = i / 20
+        this.particles.push({
+          x: ball.x + dx * t, y: ball.y + dy * t,
+          vx: (Math.random() - 0.5) * 40, vy: (Math.random() - 0.5) * 40,
+          char: '✦', life: 0.6, maxLife: 0.8,
+          color: '#fbbf24', size: 10 + Math.random() * 6,
+        })
+      }
+      ball.x = targetX
+      ball.y = this.paddleY + this.paddleH + ball.r + 2
+      ball.stuck = true
+      ball.trail = []
+      ball.backWallHits = 0
+      ball.slamStacks = 0
+      this.charge = 0
     }
   }
 
@@ -369,7 +449,7 @@ export class Game {
     // Phase 1: Pop remaining bricks one by one
     if (this.levelState === 'endPopping') {
       this.endTimer += dt
-      const popsPerSec = 8
+      const popsPerSec = 16
       const targetIdx = Math.floor(this.endTimer * popsPerSec)
       while (this.endPopIdx < this.endPopBricks.length && this.endPopIdx < targetIdx) {
         const brick = this.endPopBricks[this.endPopIdx]
@@ -402,7 +482,7 @@ export class Game {
     // Phase 2: Score tally — count up broken words, then deduct missed
     if (this.levelState === 'endTally') {
       this.endTimer += dt
-      const tallyPerSec = 16
+      const tallyPerSec = 32
       const targetIdx = Math.floor(this.endTimer * tallyPerSec)
       while (this.endTallyIdx < this.levelWords.length && this.endTallyIdx < targetIdx) {
         this.endTallyScore += this.levelWords[this.endTallyIdx].points
@@ -455,7 +535,7 @@ export class Game {
       return
     }
 
-    // Paddle movement
+    // Paddle movement — horizontal
     if (this.mouseX >= 0) {
       this.paddleTargetX = this.mouseX - this.paddleW / 2
     }
@@ -467,6 +547,14 @@ export class Game {
     }
     this.paddleTargetX = Math.max(0, Math.min(this.W - this.paddleW, this.paddleTargetX))
     this.paddleX += (this.paddleTargetX - this.paddleX) * Math.min(1, dt * 18)
+
+    // Paddle movement — vertical (mouse controls Y within range)
+    if (this.mouseY >= 0) {
+      this.paddleTargetY = Math.max(this.paddleBaseY, Math.min(this.paddleBaseY + 55, this.mouseY - this.paddleH / 2))
+    }
+    this.paddleY += (this.paddleTargetY - this.paddleY) * Math.min(1, dt * 18)
+    this.paddleVy = (this.paddleY - this.prevPaddleY) / Math.max(dt, 0.001)
+    this.prevPaddleY = this.paddleY
 
     // Safety bar patrol
     if (this.safetyHits > 0) {
@@ -485,12 +573,12 @@ export class Game {
       this.multiplier = Math.max(1.0, this.multiplier - dt * 1.0)
     }
 
-    // Slow upgrade timer
-    if (this.slowTimer > 0) {
-      this.slowTimer -= dt
-      this.bricksDriftSpeed = this.baseDriftSpeed * 0.3
-      if (this.slowTimer <= 0) {
-        this.slowTimer = 0
+    // Freeze upgrade timer — completely stops brick scrolling
+    if (this.freezeTimer > 0) {
+      this.freezeTimer -= dt
+      this.bricksDriftSpeed = 0
+      if (this.freezeTimer <= 0) {
+        this.freezeTimer = 0
         this.bricksDriftSpeed = this.baseDriftSpeed
       }
     }
@@ -521,23 +609,41 @@ export class Game {
         const bricksInGroup = this.bricks.filter(b => b.alive && b.breakOffGroupId === groupId)
         if (bricksInGroup.length === 0) { this.islandGroups.delete(groupId); continue }
 
-        // Move each brick: translate as a rigid group (no rotation — preserves shape)
+        // Move each brick: translate + rotate as rigid body around group centroid
         const elapsed = grp.initTimer - grp.timer
+        grp.angle += grp.rotSpeed * dt
+        const cx = grp.cx0 + grp.vx * elapsed
+        const cy = grp.cy0 + grp.vy * elapsed
+        const cosA = Math.cos(grp.angle)
+        const sinA = Math.sin(grp.angle)
         for (const b of bricksInGroup) {
-          b.breakOff = grp.timer  // keep in sync
-          b.x = b.breakOffOrigX + grp.vx * elapsed
-          b.y = b.breakOffOrigY + grp.vy * elapsed
+          // Offset from original centroid to brick center
+          const dx = (b.breakOffOrigX + b.w / 2) - grp.cx0
+          const dy = (b.breakOffOrigY + b.h / 2) - grp.cy0
+          // Rotate offset, then translate to new centroid
+          b.x = cx + dx * cosA - dy * sinA - b.w / 2
+          b.y = cy + dx * sinA + dy * cosA - b.h / 2
+          b.breakOff = grp.timer
+          b.breakOffAngle = grp.angle
         }
 
         if (grp.timer <= 0) {
           // Pop all bricks in this group simultaneously
+          const groupSize = bricksInGroup.length
+          let totalBonus = 0
           for (const b of bricksInGroup) {
             b.alive = false
-            const bonus = Math.round(b.points * 1.5)
+            const bonus = Math.round(b.points * groupSize)
+            totalBonus += bonus
             this.score += bonus
             this.wordsBroken++
             this.multiplier = Math.min(10.0, this.multiplier + 0.3)
             this.levelWords.push({ word: b.word, color: b.color, points: bonus })
+
+            // Fill charge bar for each brick in the group
+            if (this.charge < 1.0) {
+              this.charge = Math.min(1.0, this.charge + 0.067)
+            }
 
             // Collect letters
             for (const ch of b.word.toUpperCase()) {
@@ -561,14 +667,16 @@ export class Game {
               })
             }
           }
-          // Single group bonus popup at centroid
-          const totalBonus = bricksInGroup.reduce((s, b) => s + Math.round(b.points * 1.5), 0)
+          // Popup label: "BREAK-OFF" for 1, "BREAK-OFF x3" etc. for multiples
+          const label = groupSize > 1
+            ? `BREAK-OFF x${groupSize} +${totalBonus}`
+            : `BREAK-OFF +${totalBonus}`
           const fullElapsed = grp.initTimer
           const popCy = grp.cy0 + grp.vy * fullElapsed - this.bricksScrollY
           this.particles.push({
             x: grp.cx0 + grp.vx * fullElapsed, y: popCy,
             vx: 0, vy: -50,
-            char: `BREAK-OFF +${totalBonus}`,
+            char: label,
             life: 1.5, maxLife: 1.5,
             color: '#fff', size: 14,
           })
@@ -598,6 +706,8 @@ export class Game {
       paddleW: this.paddleW,
       paddleY: this.paddleY,
       paddleH: this.paddleH,
+      paddleBaseY: this.paddleBaseY,
+      paddleExtentMax: 55,
       W: this.W,
       H: this.H,
       safetyX: this.safetyX,
@@ -605,7 +715,7 @@ export class Game {
       safetyY: this.safetyY,
       safetyH: this.safetyH,
       safetyHits: this.safetyHits,
-      magnetStrength: this.magnetStrength,
+      paddleVy: this.paddleVy,
       ballSpeed: this.ballSpeed,
       bricksScrollY: this.bricksScrollY,
     }
@@ -613,26 +723,59 @@ export class Game {
     for (const ev of physicsEvents) {
       if (ev.type === 'brickHit') {
         this.hitBrick(ev.brick, ev.ball)
+        if (this.charge < 1.0) {
+          this.charge = Math.min(1.0, this.charge + 0.067)
+        }
+      } else if (ev.type === 'paddleSlam') {
+        const label = ev.tier === 3 ? 'PERFECT!' : ev.tier === 2 ? 'GREAT!' : 'GOOD!'
+        const color = ev.tier === 3 ? '#fbbf24' : ev.tier === 2 ? '#4ade80' : '#7dd3fc'
+        this.particles.push({
+          x: ev.ball.x, y: this.paddleY + this.paddleH + 20,
+          vx: 0, vy: 40,
+          char: label, life: 1.0, maxLife: 1.0,
+          color, size: ev.tier === 3 ? 20 : 16,
+        })
       } else if (ev.type === 'backWallHit') {
         this.particles.push(ev.particle)
       } else if (ev.type === 'safetyHit') {
         this.safetyHits--
         this.measureSafety()
       } else if (ev.type === 'ballLost') {
-        if (ev.ball.primary) {
-          ev.ball.stuck = true
-          ev.ball.trail = []
-          ev.ball.backWallHits = 0
+        // Remove the lost ball
+        if (ev.index >= 0) this.balls.splice(ev.index, 1)
+        // If no active balls remain, lose a life and respawn one
+        const activeBalls = this.balls.filter(b => !b.stuck)
+        if (activeBalls.length === 0) {
           this.multiplier = 1.0
           this.lives--
           this.levelLivesLost++
           if (this.lives <= 0) {
             this.startEndSequence()
+          } else {
+            // Respawn a single ball stuck to paddle
+            this.balls = [{
+              x: this.paddleX + this.paddleW / 2,
+              y: this.paddleY + this.paddleH + 9,
+              vx: 0, vy: 0, r: 7,
+              trail: [], stuck: true,
+              backWallHits: 0, slamStacks: 0,
+              blastCharge: 0, pierceLeft: 0,
+            }]
           }
-        } else {
-          if (ev.index >= 0) this.balls.splice(ev.index, 1)
         }
       }
+    }
+
+    // Extra life every 10,000 points
+    while (this.score >= this.nextLifeScore) {
+      this.lives++
+      this.particles.push({
+        x: this.W / 2, y: this.H / 2,
+        vx: 0, vy: -60,
+        char: '+1 LIFE!', life: 2.0, maxLife: 2.0,
+        color: '#4ade80', size: 22,
+      })
+      this.nextLifeScore += 10000
     }
 
     // Particles
@@ -643,6 +786,42 @@ export class Game {
       p.vy += 120 * dt  // gravity
       p.life -= dt
       if (p.life <= 0) this.particles.splice(i, 1)
+    }
+
+    // Shrapnel — blast projectiles that break bricks on contact
+    for (let i = this.shrapnel.length - 1; i >= 0; i--) {
+      const s = this.shrapnel[i]
+      s.x += s.vx * dt
+      s.y += s.vy * dt
+      s.life -= dt
+      if (s.life <= 0 || s.x < 0 || s.x > this.W || s.y < 0 || s.y > this.H) {
+        this.shrapnel.splice(i, 1)
+        continue
+      }
+      // Check brick collisions
+      for (const brick of this.bricks) {
+        if (!brick.alive) continue
+        const by = brick.y - this.bricksScrollY
+        if (s.x > brick.x && s.x < brick.x + brick.w && s.y > by && s.y < by + brick.h) {
+          // Use a dummy ball for hitBrick (no pierce/blast)
+          const dummyBall: Ball = {
+            x: s.x, y: s.y, vx: 0, vy: 0, r: 3,
+            trail: [], stuck: false,
+            backWallHits: 0, slamStacks: 0,
+            blastCharge: 0, pierceLeft: 0,
+          }
+          this.hitBrick(brick, dummyBall)
+          // Spark on impact
+          this.particles.push({
+            x: s.x, y: s.y,
+            vx: (Math.random() - 0.5) * 100, vy: (Math.random() - 0.5) * 100,
+            char: '✦', life: 0.3, maxLife: 0.4,
+            color: '#ff6040', size: 8,
+          })
+          this.shrapnel.splice(i, 1)
+          break
+        }
+      }
     }
 
     // Pickups — float upward, wobble, catch with paddle
@@ -786,21 +965,24 @@ export class Game {
     }
 
     // All other groups are islands — flag them for break-off as unified icebergs
+    // Cap at 5 bricks: larger chunks just keep floating, no free break-off bonus
     const mainSet = new Set(mainGroup)
     for (const g of groups.values()) {
       if (g === mainGroup) continue
+      if (g.length > 5) continue  // too big — stays as normal bricks
 
       // Compute group centroid
       let cx = 0, cy = 0
       for (const b of g) { cx += b.x + b.w / 2; cy += b.y + b.h / 2 }
       cx /= g.length; cy /= g.length
 
-      // Shared group properties — drift upward together, no rotation (preserves shape)
+      // Shared group properties — drift upward a touch faster than normal scroll,
+      // gentle rotation matched to drift speed so it looks natural
       const groupId = this.nextIslandId++
       const timer = 1.2 + Math.random() * 0.4  // 1.2–1.6s until pop (longer for drama)
-      const vx = (Math.random() - 0.5) * 30     // slight lateral drift
-      const vy = -(40 + Math.random() * 20)     // always upward (40–60 px/sec)
-      const rotSpeed = 0                         // no rotation — hold shape
+      const vx = (Math.random() - 0.5) * 10     // very slight lateral drift
+      const vy = -(this.bricksDriftSpeed * 0.4 + Math.random() * 4)  // just a bit faster than normal scroll
+      const rotSpeed = (Math.random() > 0.5 ? 1 : -1) * (0.08 + Math.random() * 0.12)  // subtle rotation ~0.08–0.2 rad/s
 
       this.islandGroups.set(groupId, {
         cx0: cx, cy0: cy, vx, vy, rotSpeed, angle: 0, timer, initTimer: timer,
@@ -849,15 +1031,20 @@ export class Game {
     this.multiplier = 1.0
     this.wordsBroken = 0
     this.lives = 3
+    this.nextLifeScore = 10000
     this.levelLivesLost = 0
     this.letterCounts = {}
     this.alphabetCompletions = 0
     this.widenLevel = 0
     this.safetyHits = 0
-    this.slowTimer = 0
-    this.magnetStrength = 0
+    this.freezeTimer = 0
+    this.charge = 0
     this.bricksDriftSpeed = this.baseDriftSpeed
     this.paddleText = 'BOOK BREAKER'
+    this.paddleY = this.paddleBaseY
+    this.paddleTargetY = this.paddleBaseY
+    this.prevPaddleY = this.paddleBaseY
+    this.paddleVy = 0
     this.measurePaddle()
     this.pickups = []
     this.particles = []
@@ -880,14 +1067,20 @@ export class Game {
       this.chapterIdx = (this.chapterIdx + 1) % this.book.chapters.length
       this.loadParagraph(this.chapterIdx, 0)
     }
+    // Wait for ball launch before scrolling
+    this.started = false
     // Reset upgrades for new level
     this.levelLivesLost = 0
     this.widenLevel = 0
     this.safetyHits = 0
-    this.slowTimer = 0
-    this.magnetStrength = 0
+    this.freezeTimer = 0
+    this.charge = 0
     this.bricksDriftSpeed = this.baseDriftSpeed
     this.paddleText = 'BOOK BREAKER'
+    this.paddleY = this.paddleBaseY
+    this.paddleTargetY = this.paddleBaseY
+    this.prevPaddleY = this.paddleBaseY
+    this.paddleVy = 0
     this.measurePaddle()
     this.pickups = []
     // Re-stick ball for new level
@@ -931,6 +1124,7 @@ export class Game {
       balls: this.balls,
       bricks: this.bricks,
       particles: this.particles,
+      shrapnel: this.shrapnel,
       pickups: this.pickups,
       widenLevel: this.widenLevel,
       paddleX: this.paddleX,
@@ -940,8 +1134,7 @@ export class Game {
       H: this.H,
       safetyHits: this.safetyHits,
       safetyW: this.safetyW,
-      slowTimer: this.slowTimer,
-      magnetStrength: this.magnetStrength,
+      freezeTimer: this.freezeTimer,
       multiplier: this.multiplier,
       score: this.score,
       wordsBroken: this.wordsBroken,
@@ -958,8 +1151,7 @@ export class Game {
   private applyUpgradeState(uState: UpgradeState) {
     this.widenLevel = uState.widenLevel
     this.safetyHits = uState.safetyHits
-    this.slowTimer = uState.slowTimer
-    this.magnetStrength = uState.magnetStrength
+    this.freezeTimer = uState.freezeTimer
     this.multiplier = uState.multiplier
     this.score = uState.score
     this.wordsBroken = uState.wordsBroken
@@ -1001,6 +1193,7 @@ export class Game {
       bricksScrollY: this.bricksScrollY,
       pickups: this.pickups,
       particles: this.particles,
+      shrapnel: this.shrapnel,
       paddleX: this.paddleX,
       paddleW: this.paddleW,
       paddleH: this.paddleH,
@@ -1013,8 +1206,8 @@ export class Game {
       safetyW: this.safetyW,
       safetyH: this.safetyH,
       balls: this.balls,
-      slowTimer: this.slowTimer,
-      magnetStrength: this.magnetStrength,
+      freezeTimer: this.freezeTimer,
+      charge: this.charge,
       started: this.started,
       levelState: this.levelState,
     }
@@ -1113,9 +1306,15 @@ export class Game {
         const gradeColors: Record<string, string> = {
           S: '#fbbf24', A: '#4ade80', B: '#7dd3fc', C: '#c084fc', D: '#f97316', F: '#f87171',
         }
-        ctx.fillStyle = gradeColors[this.endGrade] ?? '#c8d0dc'
+        const gradeColor = gradeColors[this.endGrade] ?? '#c8d0dc'
+        ctx.fillStyle = gradeColor
         ctx.font = `bold 72px 'JetBrains Mono', monospace`
-        ctx.fillText(this.endGrade, W / 2, H * 0.48)
+        ctx.fillText(this.endGrade, W / 2, H * 0.46)
+
+        // "TIER" label — smaller, same color, right underneath
+        ctx.fillStyle = gradeColor
+        ctx.font = `bold 18px 'JetBrains Mono', monospace`
+        ctx.fillText('TIER', W / 2, H * 0.46 + 42)
 
         ctx.fillStyle = '#5a6578'
         ctx.font = `14px 'JetBrains Mono', monospace`

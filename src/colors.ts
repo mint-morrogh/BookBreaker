@@ -48,8 +48,7 @@ export const UPGRADE_LABELS: Record<UpgradeType, string> = {
   multiball: 'MULTI',
   safety: 'SAFETY',
   blast: 'BLAST',
-  slow: 'SLOW',
-  magnet: 'MAGNET',
+  freeze: 'FREEZE',
   piercing: 'PIERCE',
 }
 

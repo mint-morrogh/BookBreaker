@@ -6,6 +6,8 @@ export interface PhysicsState {
   paddleW: number
   paddleY: number
   paddleH: number
+  paddleBaseY: number
+  paddleExtentMax: number  // how far paddle can extend below base (55)
   W: number
   H: number
   safetyX: number
@@ -13,7 +15,7 @@ export interface PhysicsState {
   safetyY: number
   safetyH: number
   safetyHits: number
-  magnetStrength: number
+  paddleVy: number
   ballSpeed: number
   bricksScrollY: number
 }
@@ -24,6 +26,7 @@ export type PhysicsEvent =
   | { type: 'ballLost'; ball: Ball; index: number }
   | { type: 'backWallHit'; ball: Ball; hitCount: number; particle: Particle }
   | { type: 'safetyHit' }
+  | { type: 'paddleSlam'; ball: Ball; tier: number }
 
 export function updateBalls(
   balls: Ball[],
@@ -47,22 +50,6 @@ export function updateBalls(
     }
     if (ball.trail.length > 16) ball.trail.shift()
     for (const t of ball.trail) t.age += dt
-
-    // Magnet: bend ball toward paddle — gentle at range, aggressive up close
-    if (state.magnetStrength > 0) {
-      const magnetRange = 350
-      const padCx = state.paddleX + state.paddleW / 2
-      const padCy = state.paddleY + state.paddleH / 2
-      const mdx = padCx - ball.x
-      const mdy = padCy - ball.y
-      const mDist = Math.sqrt(mdx * mdx + mdy * mdy)
-      if (mDist > 1 && mDist < magnetRange) {
-        const t = 1 - mDist / magnetRange        // 0 at edge, 1 at paddle
-        const falloff = t * t                     // quadratic — ramps hard near paddle
-        ball.vx += (mdx / mDist) * state.magnetStrength * falloff * dt
-        ball.vy += (mdy / mDist) * state.magnetStrength * falloff * dt
-      }
-    }
 
     ball.x += ball.vx * dt
     ball.y += ball.vy * dt
@@ -115,13 +102,8 @@ export function updateBalls(
 
     // Ball lost off top
     if (ball.y + ball.r < 0) {
-      if (ball.primary) {
-        events.push({ type: 'ballLost', ball, index: -1 })
-      } else {
-        // Secondary ball — just remove it
-        const idx = balls.indexOf(ball)
-        events.push({ type: 'ballLost', ball, index: idx })
-      }
+      const idx = balls.indexOf(ball)
+      events.push({ type: 'ballLost', ball, index: idx })
       continue  // skip further collision checks for this ball
     }
 
@@ -146,6 +128,44 @@ export function updateBalls(
       const speed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy)
       ball.vx = Math.cos(angle) * speed
       ball.vy = Math.sin(angle) * speed  // positive = downward
+
+      // No free pierce — must earn it with a slam
+
+      // Slam detection — paddle must be actively pushing DOWN + extended toward the ball
+      // extension: 0 = resting at top, 1 = fully extended to bottom limit
+      const extension = state.paddleExtentMax > 0
+        ? (state.paddleY - state.paddleBaseY) / state.paddleExtentMax
+        : 0
+      if (state.paddleVy > 80 && extension > 0.4) {
+        // Pierce tier scales with both velocity and extension
+        let slamTier: number
+        if (state.paddleVy > 250 && extension > 0.85) {
+          slamTier = 3  // perfect slam — fast + fully extended
+        } else if (state.paddleVy > 150 && extension > 0.6) {
+          slamTier = 2  // solid slam
+        } else {
+          slamTier = 1  // decent slam
+        }
+        ball.pierceLeft = slamTier
+
+        // Slam speed boost — 1.1x per tier, symmetrical with decay
+        const newStacks = Math.min(10, ball.slamStacks + slamTier)
+        const stacksAdded = newStacks - ball.slamStacks
+        ball.slamStacks = newStacks
+        for (let s = 0; s < stacksAdded; s++) {
+          ball.vx *= 1.1
+          ball.vy *= 1.1
+        }
+        events.push({ type: 'paddleSlam', ball, tier: slamTier })
+      } else {
+        // Non-slam paddle hit: shed one slam speed stack (decays like backwall)
+        if (ball.slamStacks > 0) {
+          ball.slamStacks--
+          ball.vx /= 1.1
+          ball.vy /= 1.1
+        }
+      }
+      // Normal hit without slam: keep existing pierce charges (don't reset)
     }
 
     // Brick collision

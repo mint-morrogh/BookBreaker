@@ -14,91 +14,90 @@ const STOP_WORDS = new Set([
   'might','must','may','can','cannot','does','done','got','get','goes',
 ])
 
+/** Yield to the browser so the UI can repaint */
+function yieldToUI(): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, 0))
+}
+
 /**
  * Process all chapters of a book and build a word → tag lookup.
- * Returns a Map where keys are lowercased words.
+ * Processes chapter-by-chapter, yielding between each so the loading bar updates.
+ * Calls onProgress(0–1) between chunks.
  */
-export function tagBook(chapters: { title: string; paragraphs: string[] }[]): Map<string, WordTag> {
+export async function tagBook(
+  chapters: { title: string; paragraphs: string[] }[],
+  onProgress?: (ratio: number) => void,
+): Promise<Map<string, WordTag>> {
   const tagMap = new Map<string, WordTag>()
-  const fullText = chapters.flatMap(ch => ch.paragraphs).join(' ')
-  const doc = nlp(fullText)
+  const allPeople = new Set<string>()
+  const allPlaces = new Set<string>()
 
-  // Extract people and place names first (most specific)
-  const people = new Set<string>()
-  for (const phrase of doc.people().out('array') as string[]) {
-    for (const w of phrase.toLowerCase().split(/\s+/)) {
-      if (w.length > 2) people.add(w)
-    }
-  }
+  const total = chapters.length
 
-  const places = new Set<string>()
-  for (const phrase of doc.places().out('array') as string[]) {
-    for (const w of phrase.toLowerCase().split(/\s+/)) {
-      if (w.length > 2) places.add(w)
-    }
-  }
+  for (let ci = 0; ci < total; ci++) {
+    const chapter = chapters[ci]
+    const chapterText = chapter.paragraphs.join(' ')
+    const doc = nlp(chapterText)
 
-  // Process every term via the json() structure
-  const sentences = doc.json() as any[]
-  for (const sentence of sentences) {
-    for (const term of sentence.terms) {
-      const word = (term.normal || term.text || '').toLowerCase().replace(/[^a-z]/g, '')
-      if (!word || tagMap.has(word)) continue
-
-      const tags: string[] = term.tags ?? []
-
-      // Stopwords
-      if (word.length <= 3 || STOP_WORDS.has(word)) {
-        tagMap.set(word, 'stopword')
-        continue
-      }
-
-      // Big words — epic tier
-      if (word.length >= 10) {
-        tagMap.set(word, 'big')
-        continue
-      }
-
-      // People (characters, names)
-      if (people.has(word) || (tags.includes('Person') && !STOP_WORDS.has(word))) {
-        tagMap.set(word, 'person')
-        continue
-      }
-
-      // Places
-      if (places.has(word) || tags.includes('Place')) {
-        tagMap.set(word, 'place')
-        continue
-      }
-
-      // Function-word tags that compromise uses instead of standard POS
-      const isFunction = tags.some(t =>
-        t === 'Negative' || t === 'QuestionWord' || t === 'Conjunction' ||
-        t === 'Preposition' || t === 'Determiner' || t === 'Expression' ||
-        t === 'Pronoun'
-      )
-      if (isFunction) {
-        tagMap.set(word, 'stopword')
-        continue
-      }
-
-      // Date/duration words — treat as stopwords (ago, years-as-duration, etc.)
-      if (tags.includes('Date') && !tags.includes('Noun')) {
-        tagMap.set(word, 'stopword')
-        continue
-      }
-
-      // POS classification
-      if (tags.includes('Adjective')) {
-        tagMap.set(word, 'adjective')
-      } else if (tags.includes('Adverb')) {
-        tagMap.set(word, 'adverb')
-      } else if (tags.includes('Verb')) {
-        tagMap.set(word, 'verb')
-      } else {
-        tagMap.set(word, 'noun')
+    // Extract people and place names
+    for (const phrase of doc.people().out('array') as string[]) {
+      for (const w of phrase.toLowerCase().split(/\s+/)) {
+        if (w.length > 2) allPeople.add(w)
       }
     }
+    for (const phrase of doc.places().out('array') as string[]) {
+      for (const w of phrase.toLowerCase().split(/\s+/)) {
+        if (w.length > 2) allPlaces.add(w)
+      }
+    }
+
+    // Process every term
+    const sentences = doc.json() as any[]
+    for (const sentence of sentences) {
+      for (const term of sentence.terms) {
+        const word = (term.normal || term.text || '').toLowerCase().replace(/[^a-z]/g, '')
+        if (!word || tagMap.has(word)) continue
+
+        const tags: string[] = term.tags ?? []
+
+        if (word.length <= 3 || STOP_WORDS.has(word)) {
+          tagMap.set(word, 'stopword'); continue
+        }
+        if (word.length >= 10) {
+          tagMap.set(word, 'big'); continue
+        }
+        if (allPeople.has(word) || (tags.includes('Person') && !STOP_WORDS.has(word))) {
+          tagMap.set(word, 'person'); continue
+        }
+        if (allPlaces.has(word) || tags.includes('Place')) {
+          tagMap.set(word, 'place'); continue
+        }
+        const isFunction = tags.some(t =>
+          t === 'Negative' || t === 'QuestionWord' || t === 'Conjunction' ||
+          t === 'Preposition' || t === 'Determiner' || t === 'Expression' ||
+          t === 'Pronoun'
+        )
+        if (isFunction) {
+          tagMap.set(word, 'stopword'); continue
+        }
+        if (tags.includes('Date') && !tags.includes('Noun')) {
+          tagMap.set(word, 'stopword'); continue
+        }
+        if (tags.includes('Adjective')) {
+          tagMap.set(word, 'adjective')
+        } else if (tags.includes('Adverb')) {
+          tagMap.set(word, 'adverb')
+        } else if (tags.includes('Verb')) {
+          tagMap.set(word, 'verb')
+        } else {
+          tagMap.set(word, 'noun')
+        }
+      }
+    }
+
+    // Report progress and yield to let the UI repaint
+    onProgress?.((ci + 1) / total)
+    await yieldToUI()
   }
 
   return tagMap

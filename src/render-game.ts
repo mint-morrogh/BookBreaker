@@ -1,4 +1,4 @@
-import type { Ball, Brick, Particle, Pickup, Dot } from './types'
+import type { Ball, Brick, Particle, Pickup, Dot, Shrapnel } from './types'
 import { DOT_COLORS, BALL_COLORS, TRAIL_COLORS } from './colors'
 import { roundRect } from './renderer'
 
@@ -10,6 +10,7 @@ export interface RenderState {
   bricksScrollY: number
   pickups: Pickup[]
   particles: Particle[]
+  shrapnel: Shrapnel[]
   paddleX: number
   paddleW: number
   paddleH: number
@@ -22,8 +23,8 @@ export interface RenderState {
   safetyW: number
   safetyH: number
   balls: Ball[]
-  slowTimer: number
-  magnetStrength: number
+  freezeTimer: number
+  charge: number
   started: boolean
   levelState: string
 }
@@ -64,6 +65,26 @@ export function renderGame(
   }
   ctx.globalAlpha = 1
 
+  // Gold charge aura — nearby dots glow gold when charge is full
+  if (state.charge >= 1.0) {
+    const padCx = state.paddleX + state.paddleW / 2
+    const padCy = state.paddleY + state.paddleH / 2
+    ctx.fillStyle = '#fbbf24'
+    for (const dot of state.dots) {
+      const ddx = dot.x - padCx
+      const ddy = dot.y - padCy
+      const distSq = ddx * ddx + ddy * ddy
+      if (distSq < 6400) {
+        const t = 1 - Math.sqrt(distSq) / 80
+        ctx.globalAlpha = t * 0.6
+        ctx.beginPath()
+        ctx.arc(dot.x, dot.y, 2.2, 0, Math.PI * 2)
+        ctx.fill()
+      }
+    }
+    ctx.globalAlpha = 1
+  }
+
   // Bricks — translate context for smooth sub-pixel scrolling
   ctx.font = state.brickFont
   ctx.textBaseline = 'middle'
@@ -75,6 +96,17 @@ export function renderGame(
     if (screenY > H + 50 || screenY + brick.h < -50) continue
 
     ctx.globalAlpha = brick.alpha
+
+    // Break-off bricks rotate as rigid body around their center
+    const rotating = brick.breakOff > 0 && brick.breakOffAngle !== 0
+    if (rotating) {
+      ctx.save()
+      const bcx = brick.x + brick.w / 2
+      const bcy = brick.y + brick.h / 2
+      ctx.translate(bcx, bcy)
+      ctx.rotate(brick.breakOffAngle)
+      ctx.translate(-bcx, -bcy)
+    }
 
     if (brick.boxed) {
       ctx.fillStyle = '#0f1520'
@@ -89,6 +121,8 @@ export function renderGame(
     ctx.fillStyle = brick.color
     ctx.textAlign = 'center'
     ctx.fillText(brick.word, brick.x + brick.w / 2, brick.y + brick.h / 2 + 1)
+
+    if (rotating) ctx.restore()
 
     ctx.globalAlpha = 1
   }
@@ -124,29 +158,52 @@ export function renderGame(
   }
   ctx.globalAlpha = 1
 
+  // Shrapnel — small bright projectiles
+  for (const s of state.shrapnel) {
+    ctx.fillStyle = '#ff6040'
+    ctx.shadowColor = '#ff6040'
+    ctx.shadowBlur = 8
+    ctx.beginPath()
+    ctx.arc(s.x, s.y, 3, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.shadowBlur = 0
+  }
+
   // Paddle
   {
     const x = state.paddleX
     const y = state.paddleY
     const w = state.paddleW
     const h = state.paddleH
+    const charged = state.charge >= 1.0
 
-    // Paddle glow
-    ctx.shadowColor = '#e8c44a'
-    ctx.shadowBlur = 20
+    // Paddle glow — brighter when fully charged
+    ctx.shadowColor = charged ? '#fbbf24' : '#e8c44a'
+    ctx.shadowBlur = charged ? 35 : 20
 
     // Paddle body — clean box
     ctx.fillStyle = '#1a1810'
-    ctx.strokeStyle = '#e8c44a'
+    ctx.strokeStyle = charged ? '#fbbf24' : '#e8c44a'
     ctx.lineWidth = 2
     roundRect(ctx, x, y, w, h, 3)
     ctx.fill()
     ctx.stroke()
 
+    // Charge fill overlay
+    if (state.charge > 0) {
+      ctx.save()
+      roundRect(ctx, x, y, w, h, 3)
+      ctx.clip()
+      const fillW = w * state.charge
+      ctx.fillStyle = charged ? '#fbbf24' : `rgba(232, 196, 74, ${0.15 + state.charge * 0.35})`
+      ctx.fillRect(x, y, fillW, h)
+      ctx.restore()
+    }
+
     ctx.shadowBlur = 0
 
-    // Paddle text — title centered in box
-    ctx.fillStyle = '#e8c44a'
+    // Paddle text — title centered in box (dark when fully charged for contrast)
+    ctx.fillStyle = charged ? '#1a1810' : '#e8c44a'
     ctx.font = `bold ${h - 5}px 'JetBrains Mono', 'Courier New', monospace`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
@@ -194,14 +251,15 @@ export function renderGame(
   ctx.fillRect(0, H - 8, W, 8)
 
   for (const ball of state.balls) {
-    const hits = ball.backWallHits
-    const ballColor = ball.primary ? BALL_COLORS[Math.min(hits, 10)] : '#7dd3fc'
-    const trailColor = ball.primary ? TRAIL_COLORS[Math.min(hits, 10)] : '#a5b4fc'
+    // Combined speed intensity from backwall hits + slam stacks
+    const intensity = Math.min(ball.backWallHits + ball.slamStacks, 10)
+    const ballColor = BALL_COLORS[intensity]
+    const trailColor = TRAIL_COLORS[intensity]
 
     // Trail — gets brighter with speed stacks
     for (let i = 0; i < ball.trail.length; i++) {
       const t = ball.trail[i]
-      const a = (1 - i / ball.trail.length) * (0.4 + hits * 0.03)
+      const a = (1 - i / ball.trail.length) * (0.4 + intensity * 0.03)
       ctx.globalAlpha = a
       ctx.fillStyle = trailColor
       ctx.beginPath()
@@ -213,7 +271,7 @@ export function renderGame(
     // Ball body
     ctx.fillStyle = ballColor
     ctx.shadowColor = ballColor
-    ctx.shadowBlur = 15 + hits * 3
+    ctx.shadowBlur = 15 + intensity * 3
     ctx.font = `bold ${ball.r * 2.5}px 'JetBrains Mono', monospace`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
@@ -233,10 +291,12 @@ export function renderGame(
       ctx.shadowBlur = 0
     }
 
-    // Piercing indicator — cyan arrows trailing
+    // Piercing indicator — color shifts green → orange → red as pierce stacks
     if (ball.pierceLeft > 0) {
-      ctx.fillStyle = '#4ade80'
-      ctx.shadowColor = '#4ade80'
+      const p = ball.pierceLeft
+      const pierceColor = p >= 5 ? '#f87171' : p >= 4 ? '#f97316' : p >= 3 ? '#fbbf24' : p >= 2 ? '#a3e635' : '#4ade80'
+      ctx.fillStyle = pierceColor
+      ctx.shadowColor = pierceColor
       ctx.shadowBlur = 6
       ctx.font = `bold 10px 'JetBrains Mono', monospace`
       ctx.fillText(`▶${ball.pierceLeft}`, ball.x + ball.r + 6, ball.y)
@@ -250,19 +310,11 @@ export function renderGame(
     ctx.font = `bold 11px 'JetBrains Mono', monospace`
     ctx.textAlign = 'left'
     ctx.textBaseline = 'middle'
-    if (state.slowTimer > 0) {
+    if (state.freezeTimer > 0) {
       ctx.fillStyle = '#7dd3fc'
       ctx.shadowColor = '#7dd3fc'
       ctx.shadowBlur = 6
-      ctx.fillText(`SLOW ${state.slowTimer.toFixed(1)}s`, 10, statusY)
-      ctx.shadowBlur = 0
-      statusY -= 16
-    }
-    if (state.magnetStrength > 0) {
-      ctx.fillStyle = '#c084fc'
-      ctx.shadowColor = '#c084fc'
-      ctx.shadowBlur = 6
-      ctx.fillText(`MAGNET x${Math.round(state.magnetStrength / 60)}`, 10, statusY)
+      ctx.fillText(`FREEZE ${state.freezeTimer.toFixed(1)}s`, 10, statusY)
       ctx.shadowBlur = 0
       statusY -= 16
     }
@@ -275,5 +327,17 @@ export function renderGame(
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillText('[ CLICK or SPACE to launch ]', W / 2, state.paddleY + 60)
+  }
+
+  // Charge recall hint
+  if (state.charge >= 1.0 && state.started && state.levelState === 'playing') {
+    ctx.fillStyle = '#fbbf24'
+    ctx.shadowColor = '#fbbf24'
+    ctx.shadowBlur = 8
+    ctx.font = `bold 13px 'JetBrains Mono', monospace`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('[ CLICK to recall ball ]', W / 2, state.paddleY + 60)
+    ctx.shadowBlur = 0
   }
 }
