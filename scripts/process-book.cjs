@@ -3,11 +3,12 @@
  * BookBreaker — Book Processing Pipeline
  *
  * Converts raw text files into game-ready TypeScript book modules.
- * Handles chapter detection, paragraph splitting, punctuation stripping,
- * fused-word fixing, and auto-difficulty classification.
+ * Handles Gutenberg headers, chapter detection, paragraph splitting,
+ * punctuation stripping, accent normalization, fused-word fixing,
+ * long-paragraph splitting, and auto-difficulty classification.
  *
  * Usage:
- *   node scripts/process-book.js <input.txt> <output-name> [options]
+ *   node scripts/process-book.cjs <input.txt> <output-name> [options]
  *
  * Options:
  *   --title "Book Title"         Book title (required)
@@ -16,11 +17,13 @@
  *   --chapters 3                 Number of chapters to extract (default: 3)
  *   --chapter-pattern "regex"    Custom regex for chapter detection
  *   --difficulty easy|medium|hard|very-hard   Override auto-detection
+ *   --max-para-words 150         Split paragraphs longer than this (default: 150)
+ *   --min-para-words 4           Drop paragraphs shorter than this (default: 4)
  *   --dry-run                    Print stats without writing file
  *
  * Examples:
- *   node scripts/process-book.js input.txt wizard-of-oz --title "The Wonderful Wizard of Oz" --author "L. Frank Baum"
- *   node scripts/process-book.js moby.txt moby-dick --title "Moby Dick" --author "Herman Melville" --chapters 5
+ *   node scripts/process-book.cjs input.txt wizard-of-oz --title "The Wonderful Wizard of Oz" --author "L. Frank Baum"
+ *   node scripts/process-book.cjs moby.txt moby-dick --title "Moby Dick" --author "Herman Melville" --chapters 5
  */
 
 const fs = require('fs')
@@ -32,7 +35,7 @@ if (args.length < 2 || args[0] === '--help' || args[0] === '-h') {
   console.log(`
 BookBreaker Book Processing Pipeline
 
-Usage: node scripts/process-book.js <input.txt> <output-name> [options]
+Usage: node scripts/process-book.cjs <input.txt> <output-name> [options]
 
 Options:
   --title "Book Title"         Book title (required)
@@ -41,6 +44,8 @@ Options:
   --chapters N                 Chapters to extract (default: 3)
   --chapter-pattern "regex"    Custom chapter regex
   --difficulty LEVEL           Override: easy, medium, hard, very-hard
+  --max-para-words N           Split long paragraphs (default: 150)
+  --min-para-words N           Drop short paragraphs (default: 4)
   --dry-run                    Stats only, no file output
   `)
   process.exit(0)
@@ -61,6 +66,8 @@ const maxChapters = parseInt(getArg('--chapters') || '3', 10)
 const customPattern = getArg('--chapter-pattern')
 const difficultyOverride = getArg('--difficulty')
 const exportName = getArg('--export')
+const maxParaWords = parseInt(getArg('--max-para-words') || '150', 10)
+const minParaWords = parseInt(getArg('--min-para-words') || '4', 10)
 const dryRun = hasFlag('--dry-run')
 
 if (!title || !author) {
@@ -73,23 +80,65 @@ if (!fs.existsSync(inputFile)) {
   process.exit(1)
 }
 
+// ── Accent normalization map ────────────────────────────────────
+const ACCENT_MAP = {
+  '\u00C0': 'A', '\u00C1': 'A', '\u00C2': 'A', '\u00C3': 'A', '\u00C4': 'A', '\u00C5': 'A',
+  '\u00C6': 'Ae', '\u00C7': 'C', '\u00C8': 'E', '\u00C9': 'E', '\u00CA': 'E', '\u00CB': 'E',
+  '\u00CC': 'I', '\u00CD': 'I', '\u00CE': 'I', '\u00CF': 'I', '\u00D0': 'D', '\u00D1': 'N',
+  '\u00D2': 'O', '\u00D3': 'O', '\u00D4': 'O', '\u00D5': 'O', '\u00D6': 'O', '\u00D8': 'O',
+  '\u00D9': 'U', '\u00DA': 'U', '\u00DB': 'U', '\u00DC': 'U', '\u00DD': 'Y',
+  '\u00E0': 'a', '\u00E1': 'a', '\u00E2': 'a', '\u00E3': 'a', '\u00E4': 'a', '\u00E5': 'a',
+  '\u00E6': 'ae', '\u00E7': 'c', '\u00E8': 'e', '\u00E9': 'e', '\u00EA': 'e', '\u00EB': 'e',
+  '\u00EC': 'i', '\u00ED': 'i', '\u00EE': 'i', '\u00EF': 'i', '\u00F1': 'n',
+  '\u00F2': 'o', '\u00F3': 'o', '\u00F4': 'o', '\u00F5': 'o', '\u00F6': 'o', '\u00F8': 'o',
+  '\u00F9': 'u', '\u00FA': 'u', '\u00FB': 'u', '\u00FC': 'u', '\u00FD': 'y', '\u00FF': 'y',
+}
+
+function normalizeAccents(str) {
+  return str.replace(/[\u00C0-\u00FF]/g, ch => ACCENT_MAP[ch] || ch)
+}
+
 // ── Chapter detection patterns (tried in order) ─────────────────
 const CHAPTER_PATTERNS = [
-  /^CHAPTER [IVX]+$/,
-  /^CHAPTER [IVX]+\./,
-  /^Chapter [IVX]+$/,
-  /^Chapter [IVX]+\./,
-  /^Chapter \d+$/,
+  /^CHAPTER [IVXLCDM]+$/,
+  /^CHAPTER [IVXLCDM]+\./,
+  /^CHAPTER [IVXLCDM]+\s*[-—]/,
+  /^Chapter [IVXLCDM]+$/,
+  /^Chapter [IVXLCDM]+\./,
+  /^Chapter [IVXLCDM]+\s*[-—]/,
   /^CHAPTER \d+$/,
-  /^[IVX]+$/,               // Roman numeral on its own line
-  /^\d+$/,                   // Just a number on its own line
+  /^CHAPTER \d+\./,
+  /^Chapter \d+$/,
+  /^Chapter \d+\./,
+  /^[IVXLCDM]+$/,             // Roman numeral on its own line
+  /^\d+$/,                     // Just a number on its own line
 ]
 
-// ── Read and detect chapters ────────────────────────────────────
-const raw = fs.readFileSync(inputFile, 'utf-8').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+// ── Read file ───────────────────────────────────────────────────
+let raw = fs.readFileSync(inputFile, 'utf-8')
+
+// Strip BOM
+raw = raw.replace(/^\uFEFF/, '')
+
+// Normalize line endings
+raw = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+
+// Strip Gutenberg header (everything before *** START OF)
+const startMarker = raw.indexOf('*** START OF')
+if (startMarker >= 0) {
+  const afterMarker = raw.indexOf('\n', startMarker)
+  if (afterMarker >= 0) raw = raw.substring(afterMarker + 1)
+}
+
+// Strip Gutenberg footer (everything after *** END OF)
+const endMarker = raw.indexOf('*** END OF')
+if (endMarker >= 0) {
+  raw = raw.substring(0, endMarker)
+}
+
 const lines = raw.split('\n')
 
-// Find the pattern that matches
+// ── Detect chapters ─────────────────────────────────────────────
 let pattern = customPattern ? new RegExp(customPattern) : null
 if (!pattern) {
   for (const p of CHAPTER_PATTERNS) {
@@ -104,7 +153,7 @@ if (!pattern) {
 if (!pattern) {
   console.error('Error: Could not detect chapter boundaries. Use --chapter-pattern to specify a regex.')
   console.error('Sample lines from file:')
-  lines.slice(0, 50).forEach((l, i) => { if (l.trim()) console.error(`  ${i}: ${l.trim().substring(0, 80)}`) })
+  lines.slice(0, 80).forEach((l, i) => { if (l.trim()) console.error(`  ${i}: ${l.trim().substring(0, 80)}`) })
   process.exit(1)
 }
 
@@ -114,12 +163,16 @@ for (let i = 0; i < lines.length; i++) {
   if (pattern.test(lines[i].trim())) allMatches.push(i)
 }
 
-// Filter: keep only matches with substantial content after them (>10 lines to next match)
 const chapterStarts = []
 for (let i = 0; i < allMatches.length; i++) {
   const next = i + 1 < allMatches.length ? allMatches[i + 1] : lines.length
   const gap = next - allMatches[i]
   if (gap > 10) chapterStarts.push(allMatches[i])
+}
+
+if (chapterStarts.length === 0) {
+  console.error('Error: No valid chapters found after filtering TOC entries.')
+  process.exit(1)
 }
 
 if (chapterStarts.length < maxChapters) {
@@ -132,20 +185,56 @@ chapterStarts.push(lines.length)
 console.log(`Detected ${chapterStarts.length - 1} chapters using pattern: ${pattern}`)
 console.log(`Extracting first ${Math.min(maxChapters, chapterStarts.length - 1)} chapters\n`)
 
-// ── Process paragraphs ──────────────────────────────────────────
+// ── Scene break detection ───────────────────────────────────────
+function isSceneBreak(text) {
+  const t = text.trim()
+  // Lines that are just decorative separators
+  if (/^[\s*\-_=~.•·]+$/.test(t)) return true
+  if (/^\*\s*\*\s*\*/.test(t)) return true
+  if (/^-{3,}$/.test(t)) return true
+  return false
+}
+
+// ── Text cleaning ───────────────────────────────────────────────
 function cleanText(text) {
   // Join wrapped lines
   let t = text.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim()
   if (!t) return ''
 
-  // Replace hyphens, dashes, and similar with spaces BEFORE stripping
-  t = t.replace(/[-\u2010\u2011\u2012\u2013\u2014\u2015]/g, ' ')
+  // Skip scene breaks
+  if (isSceneBreak(t)) return ''
 
-  // Strip all remaining punctuation (keep letters, numbers, spaces)
+  // Skip ALL-CAPS short lines (subtitles, section headers)
+  if (t === t.toUpperCase() && t.split(' ').length < 10 && t.length < 60) return ''
+
+  // Strip Gutenberg italic/bold markers: _word_ and *word*
+  t = t.replace(/_([^_]+)_/g, '$1')
+  t = t.replace(/\*([^*]+)\*/g, '$1')
+  // Also strip standalone _ and * that didn't match pairs
+  t = t.replace(/[_*]/g, '')
+
+  // Normalize accented characters (é→e, ñ→n, etc.)
+  t = normalizeAccents(t)
+
+  // Replace curly/smart quotes with nothing
+  t = t.replace(/[\u2018\u2019\u201A\u201B]/g, '')  // single curly quotes
+  t = t.replace(/[\u201C\u201D\u201E\u201F]/g, '')  // double curly quotes
+
+  // Replace ellipsis character with space
+  t = t.replace(/\u2026/g, ' ')
+
+  // Replace hyphens, dashes, and similar with spaces BEFORE stripping
+  t = t.replace(/[-\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g, ' ')
+
+  // Strip all remaining non-alphanumeric (keep letters, numbers, spaces)
   t = t.replace(/[^a-zA-Z0-9 ]/g, '')
 
   // Fix camelCase fusions (from stripped punctuation between sentences)
   t = t.replace(/([a-z])([A-Z])/g, '$1 $2')
+
+  // Fix number-letter fusions (e.g. "1815M" → "1815 M")
+  t = t.replace(/(\d)([A-Za-z])/g, '$1 $2')
+  t = t.replace(/([A-Za-z])(\d)/g, '$1 $2')
 
   // Collapse whitespace
   t = t.replace(/\s+/g, ' ').trim()
@@ -153,6 +242,44 @@ function cleanText(text) {
   return t
 }
 
+// ── Split long paragraphs at sentence-ish boundaries ────────────
+function splitLongParagraph(text, maxWords) {
+  const words = text.split(' ')
+  if (words.length <= maxWords) return [text]
+
+  const chunks = []
+  let current = []
+
+  for (const word of words) {
+    current.push(word)
+    // Try to split near the limit at a word that likely ends a sentence
+    // (ends with a common sentence-ending pattern after cleaning)
+    if (current.length >= maxWords * 0.8 && current.length <= maxWords) {
+      // Good enough — split here
+      if (current.length >= maxWords) {
+        chunks.push(current.join(' '))
+        current = []
+      }
+    } else if (current.length > maxWords) {
+      // Over limit — force split
+      chunks.push(current.join(' '))
+      current = []
+    }
+  }
+
+  if (current.length > 0) {
+    // If remainder is very short, merge with previous chunk
+    if (chunks.length > 0 && current.length < minParaWords) {
+      chunks[chunks.length - 1] += ' ' + current.join(' ')
+    } else {
+      chunks.push(current.join(' '))
+    }
+  }
+
+  return chunks
+}
+
+// ── Process chapters ────────────────────────────────────────────
 const chapters = []
 const numToExtract = Math.min(maxChapters, chapterStarts.length - 1)
 
@@ -168,9 +295,15 @@ for (let c = 0; c < numToExtract; c++) {
   for (const rp of rawParas) {
     const cleaned = cleanText(rp)
     if (!cleaned) continue
-    // Skip very short paragraphs (titles, etc.)
-    if (cleaned.split(' ').length < 4) continue
-    processed.push(cleaned)
+    if (cleaned.split(' ').length < minParaWords) continue
+
+    // Split overly long paragraphs for better gameplay
+    const splits = splitLongParagraph(cleaned, maxParaWords)
+    for (const s of splits) {
+      if (s.split(' ').length >= minParaWords) {
+        processed.push(s)
+      }
+    }
   }
 
   chapters.push({
@@ -179,18 +312,41 @@ for (let c = 0; c < numToExtract; c++) {
   })
 }
 
+// ── Validation warnings ─────────────────────────────────────────
+let warnings = 0
+for (const ch of chapters) {
+  if (ch.paragraphs.length === 0) {
+    console.error(`  WARNING: ${ch.title} has 0 paragraphs — check chapter detection`)
+    warnings++
+  }
+  for (let i = 0; i < ch.paragraphs.length; i++) {
+    const p = ch.paragraphs[i]
+    // Check for suspicious content
+    if (/\d{4,}/.test(p) && p.split(' ').length < 8) {
+      console.error(`  WARNING: ${ch.title} para ${i} looks like metadata: "${p.substring(0, 60)}"`)
+      warnings++
+    }
+    // Check for remaining fused long words (>20 chars, all lowercase)
+    const longWords = p.match(/\b[a-z]{20,}\b/g)
+    if (longWords) {
+      console.error(`  WARNING: ${ch.title} para ${i} has suspiciously long word: "${longWords[0]}"`)
+      warnings++
+    }
+  }
+}
+
 // ── Auto-classify difficulty ────────────────────────────────────
 function classifyDifficulty(chapters) {
   let totalWords = 0
   let totalParas = 0
-  let maxParaWords = 0
+  let maxParaWordCount = 0
 
   for (const ch of chapters) {
     totalParas += ch.paragraphs.length
     for (const p of ch.paragraphs) {
       const wc = p.split(' ').length
       totalWords += wc
-      if (wc > maxParaWords) maxParaWords = wc
+      if (wc > maxParaWordCount) maxParaWordCount = wc
     }
   }
 
@@ -206,8 +362,8 @@ function classifyDifficulty(chapters) {
   if (avgParasPerChapter > 80) score += 2
   else if (avgParasPerChapter > 40) score += 1
 
-  if (maxParaWords > 400) score += 2
-  else if (maxParaWords > 200) score += 1
+  if (maxParaWordCount > 400) score += 2
+  else if (maxParaWordCount > 200) score += 1
 
   if (totalWords > 10000) score += 1
 
@@ -222,13 +378,13 @@ const difficulty = difficultyOverride
   : classifyDifficulty(chapters)
 
 // ── Print stats ─────────────────────────────────────────────────
-let totalWords = 0, totalParas = 0, maxParaWords = 0
+let totalWords = 0, totalParas = 0, longestPara = 0
 for (const ch of chapters) {
   totalParas += ch.paragraphs.length
   for (const p of ch.paragraphs) {
     const wc = p.split(' ').length
     totalWords += wc
-    if (wc > maxParaWords) maxParaWords = wc
+    if (wc > longestPara) longestPara = wc
   }
 }
 
@@ -237,9 +393,10 @@ console.log(`  Chapters:           ${chapters.length}`)
 console.log(`  Total paragraphs:   ${totalParas}`)
 console.log(`  Avg paras/chapter:  ${(totalParas / chapters.length).toFixed(1)}`)
 console.log(`  Total words:        ${totalWords}`)
-console.log(`  Avg words/para:     ${(totalWords / totalParas).toFixed(1)}`)
-console.log(`  Longest paragraph:  ${maxParaWords} words`)
+console.log(`  Avg words/para:     ${totalParas > 0 ? (totalWords / totalParas).toFixed(1) : 'N/A'}`)
+console.log(`  Longest paragraph:  ${longestPara} words`)
 console.log(`  Difficulty:         ${difficulty}`)
+if (warnings > 0) console.log(`  Warnings:           ${warnings}`)
 console.log()
 
 for (let i = 0; i < chapters.length; i++) {
