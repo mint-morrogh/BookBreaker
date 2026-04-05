@@ -1,6 +1,6 @@
 import type { Ball, Brick, Particle, Pickup, Shrapnel, UpgradeType } from './types'
 import { colorTier, dropChance, UPGRADE_LABELS } from './colors'
-import { sidebarEls } from './sidebar'
+import { logWord } from './sidebar'
 
 // ── State needed by upgrade/brick-hit logic ────────────────────
 export interface UpgradeState {
@@ -134,15 +134,8 @@ export function hitBrick(brick: Brick, ball: Ball, state: UpgradeState): void {
   // Check alphabet completion (all 26 letters collected)
   checkAlphabetBonus(state)
 
-  // Log word
-  const entry = document.createElement('div')
-  entry.className = 'word-entry'
-  entry.innerHTML = `<span class="word">${brick.word}</span><span class="points">+${points}</span>`
-  sidebarEls.wordLog.prepend(entry)
-  // Keep log short
-  while (sidebarEls.wordLog.children.length > 30) {
-    sidebarEls.wordLog.lastElementChild?.remove()
-  }
+  // Log word (aggregated, sorted by total points)
+  logWord(brick.word, points)
 
   // Spawn letter particles
   for (let i = 0; i < brick.word.length; i++) {

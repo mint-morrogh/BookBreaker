@@ -5,7 +5,7 @@ import type { Brick, Ball, Particle, Pickup, Dot, Shrapnel } from './types'
 import { scoreWord, getHighScores, saveHighScore } from './scoring'
 export { getTopScore } from './scoring'
 import { TAG_COLORS, wordColor, setActiveTagMap } from './colors'
-import { sidebarEls, initLetterGrid } from './sidebar'
+import { sidebarEls, initLetterGrid, clearWordLog } from './sidebar'
 import { renderGameOver, renderPause } from './renderer'
 import { updateBalls, type PhysicsState } from './physics'
 import { activateUpgrade as runActivateUpgrade, hitBrick as runHitBrick, type UpgradeState } from './upgrades'
@@ -1113,6 +1113,7 @@ export class Game {
     this.balls = []
     this.spawnBall()
     initLetterGrid()
+    clearWordLog()
     this.updateSidebar()
   }
 
