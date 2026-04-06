@@ -337,26 +337,47 @@
     #recall-btn:active {
       background: rgba(251, 191, 36, 0.3);
     }
-    /* Sidebar toggle (mobile only) */
-    #sidebar-toggle {
+    /* Mini stats strip (mobile — always visible on right edge) */
+    #mini-stats {
       display: none;
       position: fixed;
-      top: 8px;
-      right: 8px;
-      z-index: 60;
-      background: #0c1018;
-      border: 1px solid #1a2030;
-      border-radius: 6px;
-      color: #e8c44a;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 18px;
-      font-weight: 700;
-      width: 40px;
-      height: 40px;
-      cursor: pointer;
+      top: 0;
+      right: 0;
+      width: 44px;
+      height: 100%;
+      z-index: 45;
+      background: rgba(12, 16, 24, 0.85);
+      border-left: 1px solid #1a2030;
+      flex-direction: column;
       align-items: center;
-      justify-content: center;
+      padding: 10px 0;
+      gap: 8px;
+      user-select: none;
       touch-action: manipulation;
+    }
+    .mini-stat {
+      text-align: center;
+      font-size: 8px;
+      color: #4a5568;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      line-height: 1;
+    }
+    .mini-stat-val {
+      font-size: 13px;
+      font-weight: 700;
+      margin-top: 2px;
+    }
+    .mini-stat-val.score { color: #7dd3fc; }
+    .mini-stat-val.lives { color: #f87171; }
+    .mini-stat-val.combo { color: #f472b6; }
+    .mini-stat-val.words { color: #a78bfa; }
+    #mini-stats-open {
+      margin-top: auto;
+      font-size: 16px;
+      color: #e8c44a;
+      cursor: pointer;
+      padding: 6px;
     }
     /* Sidebar backdrop (mobile only) */
     #sidebar-backdrop {
@@ -366,8 +387,18 @@
       background: rgba(0, 0, 0, 0.5);
       z-index: 49;
     }
+    /* Sidebar toggle (hidden by default, shown in sidebar header on mobile) */
+    #sidebar-toggle {
+      display: none;
+    }
     /* Mobile layout */
     @media (max-width: 768px) {
+      html, body {
+        overflow: hidden;
+        position: fixed;
+        width: 100%;
+        height: 100%;
+      }
       #sidebar {
         position: fixed;
         top: 0;
@@ -381,7 +412,7 @@
       #sidebar.open {
         transform: translateX(0);
       }
-      #sidebar-toggle {
+      #mini-stats {
         display: flex;
       }
       #sidebar-backdrop.open {
@@ -389,6 +420,9 @@
       }
       #controls-hint {
         display: none;
+      }
+      #game-area {
+        margin-right: 44px;
       }
     }
   </style>
@@ -416,7 +450,13 @@
       <canvas id="game"></canvas>
       <button id="recall-btn">RECALL</button>
     </div>
-    <button id="sidebar-toggle">☰</button>
+    <div id="mini-stats">
+      <div class="mini-stat">SCR<div class="mini-stat-val score" id="mini-score">0</div></div>
+      <div class="mini-stat">LVS<div class="mini-stat-val lives" id="mini-lives">3</div></div>
+      <div class="mini-stat">CMB<div class="mini-stat-val combo" id="mini-combo">x1</div></div>
+      <div class="mini-stat">WRD<div class="mini-stat-val words" id="mini-words">0</div></div>
+      <div id="mini-stats-open">☰</div>
+    </div>
     <div id="sidebar-backdrop"></div>
     <div id="sidebar">
       <div class="sidebar-title">BookBreaker</div>

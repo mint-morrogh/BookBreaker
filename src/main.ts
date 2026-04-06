@@ -3,15 +3,16 @@ import { BOOKS } from './content'
 import { tagBook } from './tagger'
 
 // Sidebar toggle (mobile)
-const sidebarToggle = document.getElementById('sidebar-toggle')!
 const sidebar = document.getElementById('sidebar')!
 const sidebarBackdrop = document.getElementById('sidebar-backdrop')!
+const miniStatsOpen = document.getElementById('mini-stats-open')!
 
 function toggleSidebar() {
   sidebar.classList.toggle('open')
   sidebarBackdrop.classList.toggle('open')
 }
-sidebarToggle.addEventListener('click', toggleSidebar)
+miniStatsOpen.addEventListener('click', toggleSidebar)
+miniStatsOpen.addEventListener('touchstart', (e) => { e.preventDefault(); toggleSidebar() })
 sidebarBackdrop.addEventListener('click', toggleSidebar)
 
 // Populate book picker

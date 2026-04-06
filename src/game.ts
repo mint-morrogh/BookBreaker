@@ -14,7 +14,7 @@ import { renderGame, type RenderState } from './render-game'
 // ── Game ────────────────────────────────────────────────────────
 // Fixed virtual resolution — all game logic runs in this coordinate space
 const VIRTUAL_W = 900
-const VIRTUAL_H = 950
+const VIRTUAL_H = 1200
 
 export class Game {
   private canvas: HTMLCanvasElement
@@ -147,7 +147,7 @@ export class Game {
   constructor(canvas: HTMLCanvasElement, bookIdx: number, tagMap: Map<string, WordTag>) {
     this.canvas = canvas
     this.ctx = canvas.getContext('2d')!
-    this.book = BOOKS[bookIdx]
+    this.book = this.mergeShortParagraphs(BOOKS[bookIdx])
     setActiveTagMap(tagMap)
     this.resize()
     this.loadParagraph(0, 0)
@@ -350,6 +350,35 @@ export class Game {
     const result = layoutWithLines(prepared, 9999, this.safetyH)
     const textW = result.lines.length > 0 ? result.lines[0].width : this.safetyLabel.length * 7
     this.safetyW = textW + 28
+  }
+
+  // ── Merge short paragraphs so dialogue-heavy books don't create tiny brick groups ──
+  private mergeShortParagraphs(book: Book): Book {
+    const MIN_WORDS = 25
+    return {
+      ...book,
+      chapters: book.chapters.map(ch => {
+        const merged: string[] = []
+        let buffer = ''
+        for (const p of ch.paragraphs) {
+          if (buffer) buffer += ' ' + p
+          else buffer = p
+          if (buffer.split(/\s+/).length >= MIN_WORDS) {
+            merged.push(buffer)
+            buffer = ''
+          }
+        }
+        // Flush remainder: merge into last paragraph if too short, else push as-is
+        if (buffer) {
+          if (merged.length > 0 && buffer.split(/\s+/).length < MIN_WORDS) {
+            merged[merged.length - 1] += ' ' + buffer
+          } else {
+            merged.push(buffer)
+          }
+        }
+        return { ...ch, paragraphs: merged }
+      }),
+    }
   }
 
   // ── Chapter / Paragraph / Brick loading ─────────────────────
@@ -1304,19 +1333,33 @@ export class Game {
   }
 
   private updateSidebar() {
-    sidebarEls.score.textContent = this.score.toLocaleString()
-    sidebarEls.lives.textContent = String(this.lives)
-    sidebarEls.combo.textContent = `x${this.multiplier.toFixed(1)}`
-    sidebarEls.words.textContent = String(this.wordsBroken)
+    const scoreStr = this.score.toLocaleString()
+    const livesStr = String(this.lives)
+    const comboStr = `x${this.multiplier.toFixed(1)}`
+    const wordsStr = String(this.wordsBroken)
+
+    sidebarEls.score.textContent = scoreStr
+    sidebarEls.lives.textContent = livesStr
+    sidebarEls.combo.textContent = comboStr
+    sidebarEls.words.textContent = wordsStr
     const chapter = this.book.chapters[this.chapterIdx]
     sidebarEls.chapterLabel.textContent = `Ch ${this.chapterIdx + 1}  ·  ${this.paragraphIdx + 1}/${chapter.paragraphs.length}`
-    // Progress = words broken in this chapter / total words
     const bricksAlive = this.bricks.filter(b => b.alive).length
     const wordsPlaced = this.wordCursor
     const broken = wordsPlaced - bricksAlive
     const pct = this.totalWordsInParagraph > 0 ? Math.round((broken / this.totalWordsInParagraph) * 100) : 0
     sidebarEls.progressBar.style.width = `${pct}%`
     sidebarEls.progressText.textContent = `${pct}%`
+
+    // Mini stats strip (mobile)
+    const ms = document.getElementById('mini-score')
+    if (ms) {
+      ms.textContent = scoreStr
+      document.getElementById('mini-lives')!.textContent = livesStr
+      document.getElementById('mini-combo')!.textContent = comboStr
+      document.getElementById('mini-words')!.textContent = wordsStr
+    }
+
     // Recall button visibility
     if (this.recallBtn) {
       const showRecall = this.charge >= 1.0 && this.balls.some(b => !b.stuck) && this.levelState === 'playing'
