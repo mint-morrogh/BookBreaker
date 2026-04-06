@@ -123,6 +123,8 @@ export class Game {
   private slamWallTimer = 0   // how long paddle has been sitting at max extension
   private keysDown = new Set<string>()
   private isMobile = false
+  private moveTouchId: number | null = null
+  private slamTouchId: number | null = null
   private recallBtn: HTMLElement | null = null
 
   // state
@@ -149,6 +151,12 @@ export class Game {
     this.ctx = canvas.getContext('2d')!
     this.book = this.mergeShortParagraphs(BOOKS[bookIdx])
     setActiveTagMap(tagMap)
+    // Detect mobile before resize so virtual width can adapt
+    this.isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0
+    if (this.isMobile) {
+      const cw = this.canvas.parentElement!.getBoundingClientRect().width
+      if (cw < 600) this.W = 560
+    }
     this.resize()
     this.loadParagraph(0, 0)
     this.spawnBall()
@@ -159,7 +167,7 @@ export class Game {
     window.addEventListener('resize', () => this.resize())
     window.addEventListener('mousemove', (e) => {
       const rect = this.canvas.getBoundingClientRect()
-      this.mouseX = (e.clientX - rect.left) / rect.width * VIRTUAL_W
+      this.mouseX = (e.clientX - rect.left) / rect.width * this.W
     })
     window.addEventListener('keydown', (e) => {
       this.keysDown.add(e.key)
@@ -212,8 +220,7 @@ export class Game {
       }
     })
 
-    // ── Touch controls (mobile) ─────────────────────────────────
-    this.isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0
+    // ── Touch controls (mobile) — multi-touch ───────────────────
     this.recallBtn = document.getElementById('recall-btn')
 
     // Recall button (works on both mobile and desktop)
@@ -231,14 +238,10 @@ export class Game {
 
     this.canvas.addEventListener('touchstart', (e) => {
       e.preventDefault()
-      const touch = e.touches[0]
-      if (!touch) return
-      const rect = this.canvas.getBoundingClientRect()
-      this.mouseX = (touch.clientX - rect.left) / rect.width * VIRTUAL_W
 
-      if (this.gameOver) {
-        this.restart()
-      } else if (this.levelState === 'endGrade' && this.endTimer > 1.0) {
+      // State transitions — any touch
+      if (this.gameOver) { this.restart(); return }
+      if (this.levelState === 'endGrade' && this.endTimer > 1.0) {
         if (this.lives <= 0 || this.endGrade === 'D' || this.endGrade === 'F') {
           this.gameOver = true
           const prevTop = getHighScores(this.book.title)[0] ?? 0
@@ -249,29 +252,56 @@ export class Game {
           this.levelWords = []
           this.advanceLevel()
         }
-      } else if (this.paused) {
-        this.paused = false
-      } else if (this.balls.some(b => b.stuck)) {
-        this.launchBalls()
-      } else {
-        if (this.slamCooldown <= 0) this.mouseDown = true
+        return
+      }
+      if (this.paused) { this.paused = false; return }
+
+      // Multi-touch: first finger moves paddle, second finger slams
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const touch = e.changedTouches[i]
+        const rect = this.canvas.getBoundingClientRect()
+        const vx = (touch.clientX - rect.left) / rect.width * this.W
+
+        if (this.moveTouchId === null) {
+          // First finger — paddle movement
+          this.moveTouchId = touch.identifier
+          this.mouseX = vx
+          if (this.balls.some(b => b.stuck)) this.launchBalls()
+        } else if (this.slamTouchId === null) {
+          // Second finger — slam paddle forward
+          this.slamTouchId = touch.identifier
+          if (this.slamCooldown <= 0) this.mouseDown = true
+        }
       }
     }, { passive: false })
 
     this.canvas.addEventListener('touchmove', (e) => {
       e.preventDefault()
-      const touch = e.touches[0]
-      if (!touch) return
-      const rect = this.canvas.getBoundingClientRect()
-      this.mouseX = (touch.clientX - rect.left) / rect.width * VIRTUAL_W
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const touch = e.changedTouches[i]
+        if (touch.identifier === this.moveTouchId) {
+          const rect = this.canvas.getBoundingClientRect()
+          this.mouseX = (touch.clientX - rect.left) / rect.width * this.W
+        }
+      }
     }, { passive: false })
 
-    window.addEventListener('touchend', () => {
-      if (this.mouseDown) {
-        this.mouseDown = false
-        this.slamCooldown = 0.3
+    const handleTouchEnd = (e: TouchEvent) => {
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const touch = e.changedTouches[i]
+        if (touch.identifier === this.moveTouchId) {
+          this.moveTouchId = null
+        } else if (touch.identifier === this.slamTouchId) {
+          this.slamTouchId = null
+          if (this.mouseDown) {
+            this.mouseDown = false
+            this.slamCooldown = 0.3
+          }
+        }
       }
-    })
+    }
+    window.addEventListener('touchend', handleTouchEnd)
+    window.addEventListener('touchcancel', handleTouchEnd)
 
     // Pause on focus loss
     window.addEventListener('blur', () => {
@@ -285,22 +315,32 @@ export class Game {
   private resize() {
     const rect = this.canvas.parentElement!.getBoundingClientRect()
 
-    // Scale virtual resolution to fit container, maintaining aspect ratio
-    this.scale = Math.min(rect.width / VIRTUAL_W, rect.height / VIRTUAL_H)
-    const physW = Math.round(VIRTUAL_W * this.scale)
-    const physH = Math.round(VIRTUAL_H * this.scale)
+    // Scale to fill container — extend virtual height when width-constrained
+    const scaleW = rect.width / this.W
+    const scaleH = rect.height / VIRTUAL_H
+    if (scaleW <= scaleH) {
+      // Width-constrained (portrait/mobile) — fill screen vertically
+      this.scale = scaleW
+      this.H = Math.round(rect.height / this.scale)
+    } else {
+      // Height-constrained (landscape/desktop) — standard aspect ratio
+      this.scale = scaleH
+      this.H = VIRTUAL_H
+    }
+
+    const physW = Math.round(this.W * this.scale)
+    const physH = Math.round(this.H * this.scale)
 
     // Render at CSS pixel size (1:1 mapping) — no DPR scaling
-    // This eliminates text shimmer from DPR resampling
     this.canvas.width = physW
     this.canvas.height = physH
     this.canvas.style.width = physW + 'px'
     this.canvas.style.height = physH + 'px'
     this.ctx.setTransform(this.scale, 0, 0, this.scale, 0, 0)
 
-    // Game logic always uses fixed virtual dimensions
-    this.W = VIRTUAL_W
-    this.H = VIRTUAL_H
+    // Scale drift speed proportional to field height so timing stays consistent
+    this.baseDriftSpeed = 6.4 * (this.H / VIRTUAL_H)
+    if (this.freezeTimer <= 0) this.bricksDriftSpeed = this.baseDriftSpeed
 
     this.paddleBaseY = 50
     this.paddleY = this.paddleBaseY
@@ -1122,11 +1162,11 @@ export class Game {
     if (maxLen === secondMaxLen) mainGroup = null
 
     // All other groups are islands — flag them for break-off as unified icebergs
-    // Cap at 5 bricks: larger chunks just keep floating, no free break-off bonus
+    // Cap at 4 bricks: larger chunks just keep floating, no free break-off bonus
     const mainSet = mainGroup ? new Set(mainGroup) : new Set<Brick>()
     for (const g of groups.values()) {
       if (g === mainGroup) continue
-      if (g.length > 5) continue  // too big — stays as normal bricks
+      if (g.length > 4) continue  // too big — stays as normal bricks
 
       // Compute group centroid
       let cx = 0, cy = 0
