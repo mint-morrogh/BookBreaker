@@ -169,12 +169,12 @@ export function hitBrick(brick: Brick, ball: Ball, state: UpgradeState): void {
     ball.blastCharge = 0
     for (let i = 0; i < count; i++) {
       const angle = (i / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.3
-      const speed = 250 + Math.random() * 100
+      const speed = 300 + Math.random() * 150
       state.shrapnel.push({
         x: bx, y: bsy,
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
-        life: 1.5,
+        life: 99,  // stays alive — removed by off-screen check or brick hit
       })
       // Spark particle for visual feedback
       state.particles.push({

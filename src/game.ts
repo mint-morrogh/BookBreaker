@@ -317,13 +317,15 @@ export class Game {
     if (rect.width < 10 || rect.height < 10) return  // guard against layout thrashing
 
     if (this.isMobile) {
-      // Mobile: CSS handles 100% fill — read actual rendered size
+      // Mobile: render at 1.5x DPR for smooth sub-pixel text scrolling
+      // (at 1x, drift is <1 physical pixel/frame → visible stepping)
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.5)
       const cw = this.canvas.clientWidth || Math.round(rect.width)
       const ch = this.canvas.clientHeight || Math.round(rect.height)
-      this.canvas.width = cw
-      this.canvas.height = ch
-      this.scale = cw / this.W
-      this.H = Math.round(ch / this.scale)
+      this.canvas.width = Math.round(cw * dpr)
+      this.canvas.height = Math.round(ch * dpr)
+      this.scale = Math.round(cw * dpr) / this.W
+      this.H = Math.round(Math.round(ch * dpr) / this.scale)
     } else {
       // Desktop: fit with aspect ratio, center in container
       const scaleW = rect.width / this.W
@@ -992,14 +994,14 @@ export class Game {
       }
     }
 
-    // Shrapnel — blast projectiles that break bricks on contact
+    // Shrapnel — blast projectiles that fly until hitting a brick or leaving screen
     for (let i = this.shrapnel.length - 1; i >= 0; i--) {
       const s = this.shrapnel[i]
       s.x += s.vx * dt
       s.y += s.vy * dt
-      s.vy += 200 * dt  // gravity — arcs out then falls back down
-      s.life -= dt
-      if (s.life <= 0 || s.x < 0 || s.x > this.W || s.y < 0 || s.y > this.H) {
+      s.vy += 350 * dt  // heavy gravity — arcs down into bricks below
+      // Only die when off-screen (all 4 edges)
+      if (s.x < -20 || s.x > this.W + 20 || s.y < -20 || s.y > this.H + 20) {
         this.shrapnel.splice(i, 1)
         continue
       }
