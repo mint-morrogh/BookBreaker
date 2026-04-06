@@ -28,7 +28,6 @@ export interface UpgradeState {
   brickPadX: number
   brickFontSize: number
   levelWords: { word: string; color: string; points: number }[]
-  isMobile: boolean
 }
 
 // ── Events returned so game.ts can apply mutations ─────────────
@@ -145,9 +144,8 @@ export function hitBrick(brick: Brick, ball: Ball, state: UpgradeState): void {
   // Log word (aggregated, sorted by total points)
   logWord(brick.word, points)
 
-  // Spawn letter particles (capped on mobile to prevent GC pressure)
+  // Spawn letter particles
   for (let i = 0; i < brick.word.length; i++) {
-    if (state.isMobile && state.particles.length >= 200) break
     const ch = brick.word[i]
     const brickScreenY = brick.y - state.bricksScrollY
     state.particles.push({

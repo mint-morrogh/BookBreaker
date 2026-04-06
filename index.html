@@ -339,23 +339,9 @@
       background: rgba(251, 191, 36, 0.35);
       transform: translateX(-50%) scale(0.95);
     }
-    /* Mini stats bar (mobile — top nav) */
+    /* Mini stats bar (mobile — top nav, hidden on desktop) */
     #mini-stats {
       display: none;
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 38px;
-      z-index: 45;
-      background: #0c1018;
-      border-bottom: 1px solid #1a2030;
-      flex-direction: row;
-      align-items: center;
-      justify-content: space-around;
-      padding: 0 8px;
-      user-select: none;
-      touch-action: manipulation;
     }
     .mini-stat {
       display: flex;
@@ -406,6 +392,16 @@
       }
       #mini-stats {
         display: flex;
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-around;
+        height: 38px;
+        flex-shrink: 0;
+        background: #0c1018;
+        border-bottom: 1px solid #1a2030;
+        padding: 0 8px;
+        user-select: none;
+        touch-action: manipulation;
       }
       #sidebar {
         position: fixed;
@@ -454,7 +450,6 @@
       }
       #game-area {
         margin-right: 0;
-        margin-top: 38px;
       }
       #game-area canvas {
         width: 100% !important;
@@ -482,16 +477,16 @@
   </div>
 
   <div id="app" style="display:none;">
-    <div id="game-area">
-      <canvas id="game"></canvas>
-      <button id="recall-btn">RECALL</button>
-    </div>
     <div id="mini-stats">
       <div class="mini-stat">SCR<div class="mini-stat-val score" id="mini-score">0</div></div>
       <div class="mini-stat">LVS<div class="mini-stat-val lives" id="mini-lives">3</div></div>
       <div class="mini-stat">CMB<div class="mini-stat-val combo" id="mini-combo">x1</div></div>
       <div class="mini-stat">WRD<div class="mini-stat-val words" id="mini-words">0</div></div>
       <div id="mini-stats-open">☰</div>
+    </div>
+    <div id="game-area">
+      <canvas id="game"></canvas>
+      <button id="recall-btn">RECALL</button>
     </div>
     <div id="sidebar-backdrop"></div>
     <div id="sidebar">

@@ -146,7 +146,7 @@ export function renderGame(
   }
   ctx.globalAlpha = 1
 
-  // Particles — skip shadowBlur entirely on mobile (100+ blur passes kills GPU)
+  // Particles
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
   for (const p of state.particles) {
@@ -155,12 +155,10 @@ export function renderGame(
     ctx.fillStyle = p.color
     const fontSize = Math.round(p.size * (0.5 + lifeRatio * 0.5))
     ctx.font = `bold ${fontSize}px 'JetBrains Mono', monospace`
-    if (!state.isMobile) {
-      ctx.shadowColor = p.color
-      ctx.shadowBlur = 12 * lifeRatio
-    }
+    ctx.shadowColor = p.color
+    ctx.shadowBlur = 12 * lifeRatio
     ctx.fillText(p.char, p.x, p.y)
-    if (!state.isMobile) ctx.shadowBlur = 0
+    ctx.shadowBlur = 0
   }
   ctx.globalAlpha = 1
 
@@ -332,7 +330,7 @@ export function renderGame(
     ctx.font = `14px 'JetBrains Mono', monospace`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
-    ctx.fillText(state.isMobile ? '[ HOLD to move · TAP to launch ]' : '[ CLICK or SPACE to launch ]', W / 2, state.paddleY + 60)
+    ctx.fillText(state.isMobile ? '[ HOLD to move · 2nd finger to launch ]' : '[ CLICK to slam-launch · SPACE also works ]', W / 2, state.paddleY + 60)
   }
 
   // Charge recall hint — only shown until first recall

@@ -183,7 +183,7 @@ export class Game {
     window.addEventListener('keyup', (e) => this.keysDown.delete(e.key))
 
     // Left click: hold to push paddle forward, release to snap back
-    // First click when ball is stuck just launches (no paddle push)
+    // Click: slam paddle forward (also launches ball if stuck)
     this.canvas.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return
       if (this.gameOver) {
@@ -201,11 +201,8 @@ export class Game {
         }
       } else if (this.paused) {
         this.paused = false
-      } else if (this.balls.some(b => b.stuck)) {
-        // Ball is stuck — launch it, don't push paddle
-        this.launchBalls()
       } else {
-        // Ball is in play — hold to push paddle forward (if not on cooldown)
+        // Slam paddle — launches stuck ball on slam start
         if (this.slamCooldown <= 0) this.mouseDown = true
       }
     })
@@ -267,10 +264,9 @@ export class Game {
         const vx = (touch.clientX - rect.left) / rect.width * this.W
 
         if (this.moveTouchId === null) {
-          // First finger — paddle movement
+          // First finger — paddle movement only
           this.moveTouchId = touch.identifier
           this.mouseX = vx
-          if (this.balls.some(b => b.stuck)) this.launchBalls()
         } else if (this.slamTouchId === null) {
           // Second finger — slam paddle forward
           this.slamTouchId = touch.identifier
@@ -732,8 +728,11 @@ export class Game {
     if (this.slamCooldown > 0) this.slamCooldown -= dt
     const maxY = this.paddleBaseY + 55
 
-    // Activate slam on mousedown
-    if (this.mouseDown && !this.slamActive) this.slamActive = true
+    // Activate slam on mousedown — also launches stuck balls
+    if (this.mouseDown && !this.slamActive) {
+      this.slamActive = true
+      this.launchBalls()
+    }
 
     if (this.slamActive) {
       // Accelerate into the wall — 2x speed
@@ -854,10 +853,9 @@ export class Game {
             }
 
             // Rainbow particles — keep each brick's original color
-            if (!this.isMobile || this.particles.length < 200) {
+            {
               const bsy = b.y - this.bricksScrollY
               for (let i = 0; i < b.word.length; i++) {
-                if (this.isMobile && this.particles.length >= 200) break
                 this.particles.push({
                   x: b.x + (i / b.word.length) * b.w + 8,
                   y: bsy + b.h / 2,
@@ -1019,7 +1017,7 @@ export class Game {
           }
           this.hitBrick(brick, dummyBall)
           // Spark on impact
-          if (!this.isMobile || this.particles.length < 200) {
+          {
             this.particles.push({
               x: s.x, y: s.y,
               vx: (Math.random() - 0.5) * 100, vy: (Math.random() - 0.5) * 100,
@@ -1092,12 +1090,11 @@ export class Game {
         if (b.alpha < 0) b.alpha = 0
       }
     }
-    // Purge dead bricks — more aggressively on mobile if array is large
+    // Purge fully faded bricks periodically
     this.purgeTimer -= dt
-    const bricksOverflow = this.isMobile && this.bricks.length > 300
-    if (this.purgeTimer <= 0 || bricksOverflow) {
+    if (this.purgeTimer <= 0) {
       this.bricks = this.bricks.filter(b => b.alive || b.alpha > 0)
-      this.purgeTimer = bricksOverflow ? 0.25 : 1
+      this.purgeTimer = 1
     }
 
     // Throttle sidebar DOM updates (~10hz, not 60hz)
@@ -1389,7 +1386,6 @@ export class Game {
       brickPadX: this.brickPadX,
       brickFontSize: this.brickFontSize,
       levelWords: this.levelWords,
-      isMobile: this.isMobile,
     }
   }
 
