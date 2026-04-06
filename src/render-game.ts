@@ -38,6 +38,9 @@ export function renderGame(
   H: number,
   state: RenderState,
 ): void {
+  // On mobile at full DPR, shadow blur area is DPR² more pixels — scale down
+  const blur = state.isMobile ? 0.35 : 1
+
   // Dot field background — batch resting dots into single path
   ctx.globalAlpha = 0.45
   ctx.fillStyle = DOT_COLORS[0]
@@ -138,7 +141,7 @@ export function renderGame(
     const wobbleX = Math.sin(p.wobblePhase) * 8
     ctx.globalAlpha = 0.95
     ctx.shadowColor = p.color
-    ctx.shadowBlur = 14
+    ctx.shadowBlur = 14 * blur
     ctx.fillStyle = p.color
     ctx.font = `bold 13px 'JetBrains Mono', monospace`
     ctx.fillText(p.label, p.x + wobbleX, p.y)
@@ -153,9 +156,10 @@ export function renderGame(
     const lifeRatio = p.life / p.maxLife
     ctx.globalAlpha = lifeRatio
     ctx.fillStyle = p.color
-    ctx.font = `bold ${p.size * (0.5 + lifeRatio * 0.5)}px 'JetBrains Mono', monospace`
+    const fontSize = Math.round(p.size * (0.5 + lifeRatio * 0.5))
+    ctx.font = `bold ${fontSize}px 'JetBrains Mono', monospace`
     ctx.shadowColor = p.color
-    ctx.shadowBlur = 12 * lifeRatio
+    ctx.shadowBlur = 12 * blur * lifeRatio
     ctx.fillText(p.char, p.x, p.y)
     ctx.shadowBlur = 0
   }
@@ -165,7 +169,7 @@ export function renderGame(
   for (const s of state.shrapnel) {
     ctx.fillStyle = '#ff6040'
     ctx.shadowColor = '#ff6040'
-    ctx.shadowBlur = 8
+    ctx.shadowBlur = 8 * blur
     ctx.beginPath()
     ctx.arc(s.x, s.y, 3, 0, Math.PI * 2)
     ctx.fill()
@@ -182,7 +186,7 @@ export function renderGame(
 
     // Paddle glow — brighter when fully charged
     ctx.shadowColor = charged ? '#fbbf24' : '#e8c44a'
-    ctx.shadowBlur = charged ? 35 : 20
+    ctx.shadowBlur = (charged ? 35 : 20) * blur
 
     // Paddle body — clean box
     ctx.fillStyle = '#1a1810'
@@ -225,7 +229,7 @@ export function renderGame(
     ctx.strokeStyle = '#f87171'
     ctx.lineWidth = 1.5
     ctx.shadowColor = '#f87171'
-    ctx.shadowBlur = 10
+    ctx.shadowBlur = 10 * blur
     roundRect(ctx, sx, sy, sw, sh, 3)
     ctx.fill()
     ctx.stroke()
@@ -274,7 +278,7 @@ export function renderGame(
     // Ball body
     ctx.fillStyle = ballColor
     ctx.shadowColor = ballColor
-    ctx.shadowBlur = 15 + intensity * 3
+    ctx.shadowBlur = (15 + intensity * 3) * blur
     ctx.font = `bold ${ball.r * 2.5}px 'JetBrains Mono', monospace`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
@@ -286,7 +290,7 @@ export function renderGame(
       ctx.strokeStyle = '#ff6040'
       ctx.lineWidth = 2
       ctx.shadowColor = '#ff6040'
-      ctx.shadowBlur = 10
+      ctx.shadowBlur = 10 * blur
       const pulseR = ball.r + 4 + Math.sin(Date.now() / 100) * 2
       ctx.beginPath()
       ctx.arc(ball.x, ball.y, pulseR, 0, Math.PI * 2)
@@ -300,7 +304,7 @@ export function renderGame(
       const pierceColor = p >= 5 ? '#f87171' : p >= 4 ? '#f97316' : p >= 3 ? '#fbbf24' : p >= 2 ? '#a3e635' : '#4ade80'
       ctx.fillStyle = pierceColor
       ctx.shadowColor = pierceColor
-      ctx.shadowBlur = 6
+      ctx.shadowBlur = 6 * blur
       ctx.font = `bold 10px 'JetBrains Mono', monospace`
       ctx.fillText(`▶${ball.pierceLeft}`, ball.x + ball.r + 6, ball.y)
       ctx.shadowBlur = 0
@@ -316,7 +320,7 @@ export function renderGame(
     if (state.freezeTimer > 0) {
       ctx.fillStyle = '#7dd3fc'
       ctx.shadowColor = '#7dd3fc'
-      ctx.shadowBlur = 6
+      ctx.shadowBlur = 6 * blur
       ctx.fillText(`FREEZE ${state.freezeTimer.toFixed(1)}s`, 10, statusY)
       ctx.shadowBlur = 0
       statusY -= 16
@@ -336,7 +340,7 @@ export function renderGame(
   if (state.charge >= 1.0 && state.started && !state.hasRecalled && state.levelState === 'playing') {
     ctx.fillStyle = '#fbbf24'
     ctx.shadowColor = '#fbbf24'
-    ctx.shadowBlur = 8
+    ctx.shadowBlur = 8 * blur
     ctx.font = `bold 13px 'JetBrains Mono', monospace`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'

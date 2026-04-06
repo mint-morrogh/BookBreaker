@@ -36,6 +36,18 @@ IDs: Use first 8 chars of the task UUID.
 
 Be extremely concise. Sacrifice grammar for the sake of concision.
 
+## Mobile Performance Rules
+
+**CRITICAL — learned the hard way:**
+
+1. **Fractional font sizes crash mobile browsers.** `ctx.font` with non-integer sizes (e.g. `12.3px`) thrashes the font cache. Always `Math.round()` font sizes. This applies to particle animations — round the computed size.
+
+2. **Canvas shadowBlur at high DPR is O(DPR²) per draw.** At 3x DPR, each shadowBlur costs 9x more GPU work. Scale all blur values by `0.35` on mobile to maintain visual glow at acceptable cost. The `blur` multiplier in `render-game.ts` handles this.
+
+3. **Dot field is the #1 CPU cost.** Dot physics iterates ALL dots × ALL balls per frame. Mobile uses spacing 22 (vs 14 desktop) → ~1600 dots vs ~5600. Do NOT reduce spacing below 22 on mobile.
+
+4. **DOM operations during gameplay kill mobile.** `flushWordLog()` must skip when sidebar is closed. Never sort/reorder DOM in a game-tick hot path.
+
 # BookBreaker
 
 a version of Brick Breaker that is completely made with text and runs natively on the browser. This uses the new pretext library, which is a fast, accurate, and comprehensive text measurement library that can change UI design forever. So it can render and move things around very fast. We should be able to block out the book. The actual breaker will be at the top. The ball goes down and big pieces of the chapters will start to very slowly from the bottom rise up and your job is to break all of the words and get scores based off of letters.
