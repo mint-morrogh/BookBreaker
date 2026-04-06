@@ -851,11 +851,11 @@ export class Game {
               }
             }
 
-            // Rainbow particles — keep each brick's original color (capped)
-            if (this.particles.length < 200) {
+            // Rainbow particles — keep each brick's original color
+            if (!this.isMobile || this.particles.length < 200) {
               const bsy = b.y - this.bricksScrollY
               for (let i = 0; i < b.word.length; i++) {
-                if (this.particles.length >= 200) break
+                if (this.isMobile && this.particles.length >= 200) break
                 this.particles.push({
                   x: b.x + (i / b.word.length) * b.w + 8,
                   y: bsy + b.h / 2,
@@ -1017,7 +1017,7 @@ export class Game {
           }
           this.hitBrick(brick, dummyBall)
           // Spark on impact
-          if (this.particles.length < 200) {
+          if (!this.isMobile || this.particles.length < 200) {
             this.particles.push({
               x: s.x, y: s.y,
               vx: (Math.random() - 0.5) * 100, vy: (Math.random() - 0.5) * 100,
@@ -1090,9 +1090,9 @@ export class Game {
         if (b.alpha < 0) b.alpha = 0
       }
     }
-    // Purge dead bricks — more aggressively if array is large
+    // Purge dead bricks — more aggressively on mobile if array is large
     this.purgeTimer -= dt
-    const bricksOverflow = this.bricks.length > 300
+    const bricksOverflow = this.isMobile && this.bricks.length > 300
     if (this.purgeTimer <= 0 || bricksOverflow) {
       this.bricks = this.bricks.filter(b => b.alive || b.alpha > 0)
       this.purgeTimer = bricksOverflow ? 0.25 : 1
@@ -1387,6 +1387,7 @@ export class Game {
       brickPadX: this.brickPadX,
       brickFontSize: this.brickFontSize,
       levelWords: this.levelWords,
+      isMobile: this.isMobile,
     }
   }
 
