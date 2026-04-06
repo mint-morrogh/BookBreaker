@@ -5,7 +5,7 @@ import { tagBook } from './tagger'
 // Sidebar toggle (mobile) — pauses game when open
 const sidebar = document.getElementById('sidebar')!
 const sidebarBackdrop = document.getElementById('sidebar-backdrop')!
-const miniStatsOpen = document.getElementById('mini-stats-open')!
+const miniStats = document.getElementById('mini-stats')!
 let activeGame: Game | null = null
 
 function toggleSidebar() {
@@ -13,15 +13,12 @@ function toggleSidebar() {
   sidebar.classList.toggle('open')
   sidebarBackdrop.classList.toggle('open')
   if (activeGame) {
-    if (opening) {
-      activeGame.paused = true
-    } else {
-      activeGame.paused = false
-    }
+    activeGame.paused = opening
   }
 }
-miniStatsOpen.addEventListener('click', toggleSidebar)
-miniStatsOpen.addEventListener('touchstart', (e) => { e.preventDefault(); toggleSidebar() })
+// Entire top nav bar is tappable
+miniStats.addEventListener('click', toggleSidebar)
+miniStats.addEventListener('touchstart', (e) => { e.preventDefault(); toggleSidebar() })
 sidebarBackdrop.addEventListener('click', toggleSidebar)
 
 // Populate book picker

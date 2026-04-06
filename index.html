@@ -339,55 +339,49 @@
       background: rgba(251, 191, 36, 0.35);
       transform: translateX(-50%) scale(0.95);
     }
-    /* Mini stats strip (mobile — always visible on right edge) */
+    /* Mini stats bar (mobile — top nav) */
     #mini-stats {
       display: none;
       position: fixed;
       top: 0;
+      left: 0;
       right: 0;
-      width: 52px;
-      height: 100%;
+      height: 36px;
       z-index: 45;
-      background: rgba(12, 16, 24, 0.9);
-      border-left: 1px solid #1a2030;
-      flex-direction: column;
+      background: rgba(12, 16, 24, 0.92);
+      border-bottom: 1px solid #1a2030;
+      flex-direction: row;
       align-items: center;
-      padding: 12px 2px;
-      gap: 12px;
+      justify-content: space-between;
+      padding: 0 10px;
+      gap: 6px;
       user-select: none;
       touch-action: manipulation;
     }
     .mini-stat {
-      text-align: center;
-      font-size: 7px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 8px;
       color: #4a5568;
       letter-spacing: 1px;
       text-transform: uppercase;
       line-height: 1;
-      width: 100%;
-      overflow: hidden;
     }
     .mini-stat-val {
-      font-size: 11px;
+      font-size: 13px;
       font-weight: 700;
-      margin-top: 3px;
       white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
     }
     .mini-stat-val.score { color: #7dd3fc; }
     .mini-stat-val.lives { color: #f87171; }
     .mini-stat-val.combo { color: #f472b6; }
     .mini-stat-val.words { color: #a78bfa; }
     #mini-stats-open {
-      margin-top: auto;
-      font-size: 22px;
+      font-size: 18px;
       color: #e8c44a;
       cursor: pointer;
-      padding: 12px 6px;
-      border-top: 1px solid #1a2030;
-      width: 100%;
-      text-align: center;
+      padding: 4px 2px;
       touch-action: manipulation;
     }
     /* Sidebar backdrop (mobile only) */
@@ -410,21 +404,44 @@
         width: 100%;
         height: 100%;
       }
-      #sidebar {
-        position: fixed;
-        top: 0;
-        right: 0;
-        width: 260px;
-        height: 100%;
-        z-index: 50;
-        transform: translateX(100%);
-        transition: transform 0.3s ease;
-      }
-      #sidebar.open {
-        transform: translateX(0);
-      }
       #mini-stats {
         display: flex;
+      }
+      #sidebar {
+        position: fixed;
+        top: 36px;
+        left: 0;
+        right: 0;
+        width: 100%;
+        max-height: calc(100% - 36px);
+        z-index: 50;
+        border-left: none;
+        border-bottom: 1px solid #e8c44a;
+        transform: translateY(-100%);
+        transition: transform 0.3s ease;
+        overflow-y: auto;
+      }
+      #sidebar.open {
+        transform: translateY(0);
+      }
+      #sidebar .sidebar-title {
+        display: none;
+      }
+      /* Horizontal word log in dropdown */
+      #sidebar #word-log {
+        flex-direction: row;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        overflow-y: hidden;
+        gap: 6px;
+        min-height: 0;
+      }
+      #sidebar #word-log .word-entry {
+        flex-shrink: 0;
+        white-space: nowrap;
+      }
+      #sidebar-backdrop {
+        top: 36px;
       }
       #sidebar-backdrop.open {
         display: block;
@@ -433,7 +450,8 @@
         display: none;
       }
       #game-area {
-        margin-right: 52px;
+        margin-right: 0;
+        margin-top: 36px;
       }
       #game-area canvas {
         width: 100% !important;
