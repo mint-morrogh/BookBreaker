@@ -75,6 +75,10 @@ async function loadAndStart(bookIdx: number) {
 
   overlay.classList.remove('active')
   document.getElementById('app')!.style.display = 'flex'
+  // Force mini-stats visible on mobile (bypass CSS rendering bugs)
+  if (window.innerWidth <= 768) {
+    miniStats.style.display = 'flex'
+  }
 
   const canvas = document.getElementById('game') as HTMLCanvasElement
   const game = new Game(canvas, bookIdx, tagMap)

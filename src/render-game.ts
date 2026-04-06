@@ -153,7 +153,8 @@ export function renderGame(
     const lifeRatio = p.life / p.maxLife
     ctx.globalAlpha = lifeRatio
     ctx.fillStyle = p.color
-    ctx.font = `bold ${p.size * (0.5 + lifeRatio * 0.5)}px 'JetBrains Mono', monospace`
+    const fontSize = Math.round(p.size * (0.5 + lifeRatio * 0.5))
+    ctx.font = `bold ${fontSize}px 'JetBrains Mono', monospace`
     if (!state.isMobile) {
       ctx.shadowColor = p.color
       ctx.shadowBlur = 12 * lifeRatio

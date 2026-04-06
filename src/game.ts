@@ -374,12 +374,14 @@ export class Game {
 
   private initDots() {
     this.dots = []
-    const cols = Math.ceil(this.W / this.dotSpacing) + 1
-    const rows = Math.ceil(this.H / this.dotSpacing) + 1
+    // Wider spacing on mobile: 1600 dots vs 4000+ (60% less CPU/GPU per frame)
+    const spacing = this.isMobile ? 22 : this.dotSpacing
+    const cols = Math.ceil(this.W / spacing) + 1
+    const rows = Math.ceil(this.H / spacing) + 1
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        const x = c * this.dotSpacing
-        const y = r * this.dotSpacing
+        const x = c * spacing
+        const y = r * spacing
         this.dots.push({ homeX: x, homeY: y, x, y, vx: 0, vy: 0 })
       }
     }
