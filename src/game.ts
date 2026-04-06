@@ -848,22 +848,23 @@ export class Game {
             for (const ch of b.word.toUpperCase()) {
               if (ch >= 'A' && ch <= 'Z') {
                 this.letterCounts[ch] = (this.letterCounts[ch] || 0) + 1
-                const el = document.getElementById(`letter-${ch}`)
-                if (el) el.classList.add('collected')
               }
             }
 
-            // Rainbow particles — keep each brick's original color
-            const bsy = b.y - this.bricksScrollY
-            for (let i = 0; i < b.word.length; i++) {
-              this.particles.push({
-                x: b.x + (i / b.word.length) * b.w + 8,
-                y: bsy + b.h / 2,
-                vx: (Math.random() - 0.5) * 300,
-                vy: (Math.random() - 0.5) * 300,
-                char: b.word[i], life: 1.0, maxLife: 1.2,
-                color: b.color, size: 16,
-              })
+            // Rainbow particles — keep each brick's original color (capped)
+            if (this.particles.length < 200) {
+              const bsy = b.y - this.bricksScrollY
+              for (let i = 0; i < b.word.length; i++) {
+                if (this.particles.length >= 200) break
+                this.particles.push({
+                  x: b.x + (i / b.word.length) * b.w + 8,
+                  y: bsy + b.h / 2,
+                  vx: (Math.random() - 0.5) * 300,
+                  vy: (Math.random() - 0.5) * 300,
+                  char: b.word[i], life: 1.0, maxLife: 1.2,
+                  color: b.color, size: 16,
+                })
+              }
             }
           }
           // Popup label: "BREAK-OFF" for 1, "BREAK-OFF x3" etc. for multiples
@@ -1016,12 +1017,14 @@ export class Game {
           }
           this.hitBrick(brick, dummyBall)
           // Spark on impact
-          this.particles.push({
-            x: s.x, y: s.y,
-            vx: (Math.random() - 0.5) * 100, vy: (Math.random() - 0.5) * 100,
-            char: '✦', life: 0.3, maxLife: 0.4,
-            color: '#ff6040', size: 8,
-          })
+          if (this.particles.length < 200) {
+            this.particles.push({
+              x: s.x, y: s.y,
+              vx: (Math.random() - 0.5) * 100, vy: (Math.random() - 0.5) * 100,
+              char: '✦', life: 0.3, maxLife: 0.4,
+              color: '#ff6040', size: 8,
+            })
+          }
           this.shrapnel.splice(i, 1)
           break
         }
@@ -1087,11 +1090,12 @@ export class Game {
         if (b.alpha < 0) b.alpha = 0
       }
     }
-    // Purge fully faded bricks periodically (avoid alloc every frame)
+    // Purge dead bricks — more aggressively if array is large
     this.purgeTimer -= dt
-    if (this.purgeTimer <= 0) {
+    const bricksOverflow = this.bricks.length > 300
+    if (this.purgeTimer <= 0 || bricksOverflow) {
       this.bricks = this.bricks.filter(b => b.alive || b.alpha > 0)
-      this.purgeTimer = 1
+      this.purgeTimer = bricksOverflow ? 0.25 : 1
     }
 
     // Throttle sidebar DOM updates (~10hz, not 60hz)
@@ -1399,6 +1403,11 @@ export class Game {
 
   private updateSidebar() {
     flushWordLog()
+    // Sync letter grid from counts (batched, not per-brick)
+    for (const ch in this.letterCounts) {
+      const el = document.getElementById(`letter-${ch}`)
+      if (el) el.classList.add('collected')
+    }
     const scoreStr = this.score.toLocaleString()
     const livesStr = String(this.lives)
     const comboStr = `x${this.multiplier.toFixed(1)}`
