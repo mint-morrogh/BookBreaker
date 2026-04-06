@@ -164,7 +164,11 @@ export class Game {
     sidebarEls.bookName.textContent = this.book.title
     this.updateSidebar()
 
-    window.addEventListener('resize', () => this.resize())
+    let resizeTimer = 0
+    window.addEventListener('resize', () => {
+      clearTimeout(resizeTimer)
+      resizeTimer = window.setTimeout(() => this.resize(), 150) as unknown as number
+    })
     window.addEventListener('mousemove', (e) => {
       const rect = this.canvas.getBoundingClientRect()
       this.mouseX = (e.clientX - rect.left) / rect.width * this.W
@@ -314,6 +318,7 @@ export class Game {
 
   private resize() {
     const rect = this.canvas.parentElement!.getBoundingClientRect()
+    if (rect.width < 10 || rect.height < 10) return  // guard against layout thrashing
 
     if (this.isMobile) {
       // Mobile: CSS handles 100% fill — read actual rendered size
@@ -341,21 +346,30 @@ export class Game {
       this.canvas.style.width = physW + 'px'
       this.canvas.style.height = physH + 'px'
     }
+
+    // Guard against NaN/Infinity from zero-size containers
+    if (!isFinite(this.H) || this.H < 100) this.H = VIRTUAL_H
+    if (!isFinite(this.scale) || this.scale <= 0) this.scale = 1
+
     this.ctx.setTransform(this.scale, 0, 0, this.scale, 0, 0)
 
     // Scale drift speed proportional to field height so timing stays consistent
     this.baseDriftSpeed = 6.4 * (this.H / VIRTUAL_H)
     if (this.freezeTimer <= 0) this.bricksDriftSpeed = this.baseDriftSpeed
 
-    this.paddleBaseY = 50
-    this.paddleY = this.paddleBaseY
-    this.paddleTargetY = this.paddleBaseY
-    this.prevPaddleY = this.paddleBaseY
-    this.measurePaddle()
-    this.brickFontSize = 15
-    this.brickLineH = this.brickFontSize + 6
-    this.brickFont = `${this.brickFontSize}px 'JetBrains Mono', 'Courier New', monospace`
-    this.initDots()
+    // Heavy reinitialization only when not actively playing
+    // (avoids GC pressure from iOS Safari URL bar resize events)
+    if (!this.started || this.gameOver) {
+      this.paddleBaseY = 50
+      this.paddleY = this.paddleBaseY
+      this.paddleTargetY = this.paddleBaseY
+      this.prevPaddleY = this.paddleBaseY
+      this.measurePaddle()
+      this.brickFontSize = 15
+      this.brickLineH = this.brickFontSize + 6
+      this.brickFont = `${this.brickFontSize}px 'JetBrains Mono', 'Courier New', monospace`
+      this.initDots()
+    }
   }
 
   private initDots() {
