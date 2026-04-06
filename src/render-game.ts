@@ -146,18 +146,22 @@ export function renderGame(
   }
   ctx.globalAlpha = 1
 
-  // Particles
+  // Particles — shadow only on bright particles (shadowBlur is CPU-expensive)
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
   for (const p of state.particles) {
     const lifeRatio = p.life / p.maxLife
     ctx.globalAlpha = lifeRatio
     ctx.fillStyle = p.color
     ctx.font = `bold ${p.size * (0.5 + lifeRatio * 0.5)}px 'JetBrains Mono', monospace`
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.shadowColor = p.color
-    ctx.shadowBlur = 12 * lifeRatio
-    ctx.fillText(p.char, p.x, p.y)
-    ctx.shadowBlur = 0
+    if (lifeRatio > 0.5) {
+      ctx.shadowColor = p.color
+      ctx.shadowBlur = 12 * lifeRatio
+      ctx.fillText(p.char, p.x, p.y)
+      ctx.shadowBlur = 0
+    } else {
+      ctx.fillText(p.char, p.x, p.y)
+    }
   }
   ctx.globalAlpha = 1
 

@@ -113,6 +113,9 @@ export function activateUpgrade(pickup: Pickup, state: UpgradeState): UpgradeEve
   return events
 }
 
+// Cache letter DOM elements to avoid getElementById in hot path
+const letterElCache = new Map<string, HTMLElement>()
+
 export function hitBrick(brick: Brick, ball: Ball, state: UpgradeState): void {
   brick.alive = false
   const points = Math.round(brick.points * state.multiplier)
@@ -122,11 +125,15 @@ export function hitBrick(brick: Brick, ball: Ball, state: UpgradeState): void {
   // Track for level-end animation
   state.levelWords.push({ word: brick.word, color: brick.color, points })
 
-  // Collect letters
+  // Collect letters (cached DOM lookups)
   for (const ch of brick.word.toUpperCase()) {
     if (ch >= 'A' && ch <= 'Z') {
       state.letterCounts[ch] = (state.letterCounts[ch] || 0) + 1
-      const el = document.getElementById(`letter-${ch}`)
+      let el = letterElCache.get(ch)
+      if (!el) {
+        el = document.getElementById(`letter-${ch}`) ?? undefined
+        if (el) letterElCache.set(ch, el)
+      }
       if (el) el.classList.add('collected')
     }
   }
@@ -137,8 +144,10 @@ export function hitBrick(brick: Brick, ball: Ball, state: UpgradeState): void {
   // Log word (aggregated, sorted by total points)
   logWord(brick.word, points)
 
-  // Spawn letter particles
+  // Spawn letter particles (capped to prevent mobile GC pressure)
+  const MAX_PARTICLES = 200
   for (let i = 0; i < brick.word.length; i++) {
+    if (state.particles.length >= MAX_PARTICLES) break
     const ch = brick.word[i]
     const brickScreenY = brick.y - state.bricksScrollY
     state.particles.push({

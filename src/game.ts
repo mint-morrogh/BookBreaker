@@ -5,7 +5,7 @@ import type { Brick, Ball, Particle, Pickup, Dot, Shrapnel } from './types'
 import { scoreWord, getHighScores, saveHighScore } from './scoring'
 export { getTopScore } from './scoring'
 import { TAG_COLORS, wordColor, setActiveTagMap } from './colors'
-import { sidebarEls, initLetterGrid, clearWordLog } from './sidebar'
+import { sidebarEls, initLetterGrid, clearWordLog, flushWordLog } from './sidebar'
 import { renderGameOver, renderPause } from './renderer'
 import { updateBalls, type PhysicsState } from './physics'
 import { activateUpgrade as runActivateUpgrade, hitBrick as runHitBrick, type UpgradeState } from './upgrades'
@@ -978,14 +978,17 @@ export class Game {
       this.nextLifeScore += 10000
     }
 
-    // Particles
+    // Particles — swap-and-pop for O(1) removal
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const p = this.particles[i]
       p.x += p.vx * dt
       p.y += p.vy * dt
       p.vy += 120 * dt  // gravity
       p.life -= dt
-      if (p.life <= 0) this.particles.splice(i, 1)
+      if (p.life <= 0) {
+        this.particles[i] = this.particles[this.particles.length - 1]
+        this.particles.pop()
+      }
     }
 
     // Shrapnel — blast projectiles that break bricks on contact
@@ -1103,7 +1106,10 @@ export class Game {
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const p = this.particles[i]
       p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 120 * dt; p.life -= dt
-      if (p.life <= 0) this.particles.splice(i, 1)
+      if (p.life <= 0) {
+        this.particles[i] = this.particles[this.particles.length - 1]
+        this.particles.pop()
+      }
     }
     for (const b of this.bricks) {
       if (!b.alive && b.alpha > 0) {
@@ -1392,6 +1398,7 @@ export class Game {
   }
 
   private updateSidebar() {
+    flushWordLog()
     const scoreStr = this.score.toLocaleString()
     const livesStr = String(this.lives)
     const comboStr = `x${this.multiplier.toFixed(1)}`

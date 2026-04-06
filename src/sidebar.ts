@@ -25,6 +25,7 @@ export function initLetterGrid() {
 
 // ── Word log — aggregated, sorted by total points ───────────────
 const wordMap = new Map<string, { count: number; totalPoints: number; el: HTMLDivElement }>()
+let wordLogDirty = false
 
 export function logWord(word: string, points: number) {
   const key = word.toLowerCase()
@@ -33,7 +34,6 @@ export function logWord(word: string, points: number) {
   if (existing) {
     existing.count++
     existing.totalPoints += points
-    // Update display
     const countStr = existing.count > 1 ? ` x${existing.count}` : ''
     existing.el.innerHTML = `<span class="word">${word}${countStr}</span><span class="points">+${existing.totalPoints}</span>`
   } else {
@@ -43,11 +43,16 @@ export function logWord(word: string, points: number) {
     wordMap.set(key, { count: 1, totalPoints: points, el })
     sidebarEls.wordLog.appendChild(el)
   }
+  wordLogDirty = true
+}
 
-  // Re-sort: highest total points first
+// Flush deferred sort — called from throttled sidebar update, not per brick
+export function flushWordLog() {
+  if (!wordLogDirty) return
+  wordLogDirty = false
   const sorted = [...wordMap.values()].sort((a, b) => b.totalPoints - a.totalPoints)
   for (const entry of sorted) {
-    sidebarEls.wordLog.appendChild(entry.el) // moves existing element to end
+    sidebarEls.wordLog.appendChild(entry.el)
   }
 }
 
