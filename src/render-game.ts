@@ -28,6 +28,7 @@ export interface RenderState {
   started: boolean
   hasLaunched: boolean
   hasRecalled: boolean
+  isMobile: boolean
   levelState: string
 }
 
@@ -328,7 +329,7 @@ export function renderGame(
     ctx.font = `14px 'JetBrains Mono', monospace`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
-    ctx.fillText('[ CLICK or SPACE to launch ]', W / 2, state.paddleY + 60)
+    ctx.fillText(state.isMobile ? '[ TAP to launch ]' : '[ CLICK or SPACE to launch ]', W / 2, state.paddleY + 60)
   }
 
   // Charge recall hint — only shown until first recall
@@ -339,7 +340,7 @@ export function renderGame(
     ctx.font = `bold 13px 'JetBrains Mono', monospace`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
-    ctx.fillText('[ RIGHT CLICK to recall ball ]', W / 2, state.paddleY + 60)
+    ctx.fillText(state.isMobile ? '[ TAP RECALL button ]' : '[ RIGHT CLICK to recall ball ]', W / 2, state.paddleY + 60)
     ctx.shadowBlur = 0
   }
 }

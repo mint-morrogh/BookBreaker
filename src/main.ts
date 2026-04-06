@@ -2,17 +2,32 @@ import { Game, getTopScore } from './game'
 import { BOOKS } from './content'
 import { tagBook } from './tagger'
 
+// Sidebar toggle (mobile)
+const sidebarToggle = document.getElementById('sidebar-toggle')!
+const sidebar = document.getElementById('sidebar')!
+const sidebarBackdrop = document.getElementById('sidebar-backdrop')!
+
+function toggleSidebar() {
+  sidebar.classList.toggle('open')
+  sidebarBackdrop.classList.toggle('open')
+}
+sidebarToggle.addEventListener('click', toggleSidebar)
+sidebarBackdrop.addEventListener('click', toggleSidebar)
+
 // Populate book picker
 const bookList = document.getElementById('book-list')!
 BOOKS.forEach((book, idx) => {
   const top = getTopScore(book.title)
   const el = document.createElement('div')
   el.className = 'book-option'
+  const diffColors: Record<string, string> = { Easy: '#4ade80', Medium: '#fbbf24', Hard: '#f97316', 'Very Hard': '#f87171' }
+  const diffColor = diffColors[book.difficulty] ?? '#c8d0dc'
   el.innerHTML = `
     <div class="book-opt-title">${book.title}</div>
     <div class="book-opt-author">${book.author}</div>
     <div class="book-opt-meta">
       <span>${book.chapters.length} chapters</span>
+      <span style="color:${diffColor}">${book.difficulty}</span>
       ${top > 0 ? `<span class="book-opt-score">★ ${top.toLocaleString()}</span>` : ''}
     </div>
   `

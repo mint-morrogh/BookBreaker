@@ -120,7 +120,10 @@ export class Game {
   private mouseDown = false   // left click held = paddle pushes forward
   private slamActive = false  // true while paddle is traveling forward (click or hold)
   private slamCooldown = 0    // seconds until next slam allowed
+  private slamWallTimer = 0   // how long paddle has been sitting at max extension
   private keysDown = new Set<string>()
+  private isMobile = false
+  private recallBtn: HTMLElement | null = null
 
   // state
   private started = false
@@ -206,6 +209,67 @@ export class Game {
       e.preventDefault()
       if (this.charge >= 1.0 && this.balls.some(b => !b.stuck)) {
         this.recallBall()
+      }
+    })
+
+    // ── Touch controls (mobile) ─────────────────────────────────
+    this.isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0
+    this.recallBtn = document.getElementById('recall-btn')
+
+    // Recall button (works on both mobile and desktop)
+    if (this.recallBtn) {
+      const doRecall = (e: Event) => {
+        e.preventDefault()
+        e.stopPropagation()
+        if (this.charge >= 1.0 && this.balls.some(b => !b.stuck)) {
+          this.recallBall()
+        }
+      }
+      this.recallBtn.addEventListener('touchstart', doRecall)
+      this.recallBtn.addEventListener('click', doRecall)
+    }
+
+    this.canvas.addEventListener('touchstart', (e) => {
+      e.preventDefault()
+      const touch = e.touches[0]
+      if (!touch) return
+      const rect = this.canvas.getBoundingClientRect()
+      this.mouseX = (touch.clientX - rect.left) / rect.width * VIRTUAL_W
+
+      if (this.gameOver) {
+        this.restart()
+      } else if (this.levelState === 'endGrade' && this.endTimer > 1.0) {
+        if (this.lives <= 0 || this.endGrade === 'D' || this.endGrade === 'F') {
+          this.gameOver = true
+          const prevTop = getHighScores(this.book.title)[0] ?? 0
+          this.endScores = saveHighScore(this.book.title, this.score)
+          this.isNewHigh = this.score > 0 && this.score >= prevTop
+        } else {
+          this.levelState = 'playing'
+          this.levelWords = []
+          this.advanceLevel()
+        }
+      } else if (this.paused) {
+        this.paused = false
+      } else if (this.balls.some(b => b.stuck)) {
+        this.launchBalls()
+      } else {
+        if (this.slamCooldown <= 0) this.mouseDown = true
+      }
+    }, { passive: false })
+
+    this.canvas.addEventListener('touchmove', (e) => {
+      e.preventDefault()
+      const touch = e.touches[0]
+      if (!touch) return
+      const rect = this.canvas.getBoundingClientRect()
+      this.mouseX = (touch.clientX - rect.left) / rect.width * VIRTUAL_W
+    }, { passive: false })
+
+    window.addEventListener('touchend', () => {
+      if (this.mouseDown) {
+        this.mouseDown = false
+        this.slamCooldown = 0.3
       }
     })
 
@@ -572,7 +636,7 @@ export class Game {
       this.paddleTargetX += 600 * dt
     }
     this.paddleTargetX = Math.max(0, Math.min(this.W - this.paddleW, this.paddleTargetX))
-    this.paddleX += (this.paddleTargetX - this.paddleX) * Math.min(1, dt * 18)
+    this.paddleX += (this.paddleTargetX - this.paddleX) * Math.min(1, dt * 22.5)
 
     // Paddle movement — vertical: click fires paddle to wall, release eases back
     if (this.slamCooldown > 0) this.slamCooldown -= dt
@@ -589,11 +653,15 @@ export class Game {
       if (this.paddleY >= maxY) {
         this.paddleY = maxY
         this.paddleVyInternal = 0
+        this.slamWallTimer += dt  // track time sitting at max extension
         if (!this.mouseDown) this.slamActive = false
+      } else {
+        this.slamWallTimer = 0  // still in transit — reset
       }
     } else {
       // Ease back to base — smooth exponential
       this.paddleVyInternal = 0
+      this.slamWallTimer = 0  // not slamming — reset
       this.paddleY += (this.paddleBaseY - this.paddleY) * Math.min(1, dt * 14)
     }
     this.paddleVy = (this.paddleY - this.prevPaddleY) / Math.max(dt, 0.001)
@@ -759,6 +827,7 @@ export class Game {
       safetyH: this.safetyH,
       safetyHits: this.safetyHits,
       paddleVy: this.paddleVy,
+      slamWallTimer: this.slamWallTimer,
       ballSpeed: this.ballSpeed,
       bricksScrollY: this.bricksScrollY,
     }
@@ -1248,6 +1317,11 @@ export class Game {
     const pct = this.totalWordsInParagraph > 0 ? Math.round((broken / this.totalWordsInParagraph) * 100) : 0
     sidebarEls.progressBar.style.width = `${pct}%`
     sidebarEls.progressText.textContent = `${pct}%`
+    // Recall button visibility
+    if (this.recallBtn) {
+      const showRecall = this.charge >= 1.0 && this.balls.some(b => !b.stuck) && this.levelState === 'playing'
+      this.recallBtn.style.display = showRecall ? 'block' : 'none'
+    }
   }
 
   // ── Render ──────────────────────────────────────────────────
@@ -1286,6 +1360,7 @@ export class Game {
       started: this.started,
       hasLaunched: this.hasLaunched,
       hasRecalled: this.hasRecalled,
+      isMobile: this.isMobile,
       levelState: this.levelState,
     }
     renderGame(ctx, W, H, renderState)

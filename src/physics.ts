@@ -16,6 +16,7 @@ export interface PhysicsState {
   safetyH: number
   safetyHits: number
   paddleVy: number
+  slamWallTimer: number  // how long paddle has been sitting at max extension
   ballSpeed: number
   bricksScrollY: number
 }
@@ -129,32 +130,58 @@ export function updateBalls(
       ball.vx = Math.cos(angle) * speed
       ball.vy = Math.sin(angle) * speed  // positive = downward
 
-      // Slam detection — purely positional: how close is the paddle to max extension?
-      // Cooldown on release prevents spam; holding at front is a valid but risky strategy.
+      // Slam detection — timing-based: rewards pressing right as ball arrives.
+      // If paddle is mid-travel, use distance from max extension.
+      // If paddle is at the wall, degrade quality based on how long it's been sitting there.
       const maxY = state.paddleBaseY + state.paddleExtentMax
       const distFromMax = maxY - state.paddleY  // 0 = fully extended, 55 = at rest
 
       if (distFromMax < 18) {
-        // Tight windows — distance from the max extension line
         let slamTier: number
-        if (distFromMax < 4) {
-          slamTier = 3  // PERFECT — right at the line
-        } else if (distFromMax < 10) {
-          slamTier = 2  // GREAT — close
+        if (distFromMax >= 2) {
+          // Paddle is still in transit — use positional tiers (already requires good timing)
+          if (distFromMax < 4) {
+            slamTier = 3  // PERFECT — about to hit the wall
+          } else if (distFromMax < 10) {
+            slamTier = 2  // GREAT — close
+          } else {
+            slamTier = 1  // GOOD — decent
+          }
         } else {
-          slamTier = 1  // GOOD — decent
+          // Paddle is AT the wall — use time-at-wall to determine quality.
+          // Just arrived = rewarded, camping = no bonus.
+          const t = state.slamWallTimer
+          if (t < 0.06) {
+            slamTier = 3  // PERFECT — ball hit within 60ms of arriving at wall
+          } else if (t < 0.15) {
+            slamTier = 2  // GREAT — within 150ms
+          } else if (t < 0.30) {
+            slamTier = 1  // GOOD — within 300ms
+          } else {
+            slamTier = 0  // Camping — no slam bonus
+          }
         }
-        ball.pierceLeft = slamTier
 
-        // Slam speed boost — 1.1x per tier, symmetrical with decay
-        const newStacks = Math.min(10, ball.slamStacks + slamTier)
-        const stacksAdded = newStacks - ball.slamStacks
-        ball.slamStacks = newStacks
-        for (let s = 0; s < stacksAdded; s++) {
-          ball.vx *= 1.1
-          ball.vy *= 1.1
+        if (slamTier > 0) {
+          ball.pierceLeft = slamTier
+
+          // Slam speed boost — 1.1x per tier, symmetrical with decay
+          const newStacks = Math.min(10, ball.slamStacks + slamTier)
+          const stacksAdded = newStacks - ball.slamStacks
+          ball.slamStacks = newStacks
+          for (let s = 0; s < stacksAdded; s++) {
+            ball.vx *= 1.1
+            ball.vy *= 1.1
+          }
+          events.push({ type: 'paddleSlam', ball, tier: slamTier })
+        } else {
+          // Camping at wall — treat like a normal paddle hit, shed a stack
+          if (ball.slamStacks > 0) {
+            ball.slamStacks--
+            ball.vx /= 1.1
+            ball.vy /= 1.1
+          }
         }
-        events.push({ type: 'paddleSlam', ball, tier: slamTier })
       } else {
         // Non-slam paddle hit: shed one slam speed stack (decays like backwall)
         if (ball.slamStacks > 0) {

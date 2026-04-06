@@ -1,5 +1,7 @@
 # BookBreaker
 
+> **[Play BookBreaker](https://mint-morrogh.github.io/BookBreaker/)**
+
 A text-rendered brick breaker game that turns classic literature into an arcade experience. Every element (paddle, ball, bricks, particles) is drawn with text characters on an HTML Canvas. Words from real book chapters rise from the bottom as bricks; smash them to score points based on Scrabble-style letter values.
 
 Built on [`@chenglou/pretext`](https://github.com/chenglou/pretext), a precise text measurement library, to ensure pixel-accurate sizing and layout of all text-based game elements at 60fps.
