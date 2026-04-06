@@ -1,6 +1,27 @@
 import { Game, getTopScore } from './game'
 import { BOOKS } from './content'
 import { tagBook } from './tagger'
+import { clearAllScores } from './scoring'
+
+// One-time migration: clear old scores for unlock system
+if (!localStorage.getItem('bb_unlock_v1')) {
+  clearAllScores()
+  localStorage.setItem('bb_unlock_v1', '1')
+}
+
+// Unlock system — each tier requires a score on any book from the previous tier
+const UNLOCK_REQ: Record<string, string | null> = {
+  'Easy': null,
+  'Medium': 'Easy',
+  'Hard': 'Medium',
+  'Very Hard': 'Hard',
+}
+
+function isTierUnlocked(difficulty: string): boolean {
+  const req = UNLOCK_REQ[difficulty]
+  if (!req) return true
+  return BOOKS.filter(b => b.difficulty === req).some(b => getTopScore(b.title) > 0)
+}
 
 // Sidebar toggle (mobile) — pauses game when open
 const sidebar = document.getElementById('sidebar')!
@@ -24,22 +45,55 @@ sidebarBackdrop.addEventListener('click', toggleSidebar)
 
 // Populate book picker
 const bookList = document.getElementById('book-list')!
+const diffColors: Record<string, string> = { Easy: '#4ade80', Medium: '#fbbf24', Hard: '#f97316', 'Very Hard': '#f87171' }
+
+let lastDiff = ''
 BOOKS.forEach((book, idx) => {
-  const top = getTopScore(book.title)
-  const el = document.createElement('div')
-  el.className = 'book-option'
-  const diffColors: Record<string, string> = { Easy: '#4ade80', Medium: '#fbbf24', Hard: '#f97316', 'Very Hard': '#f87171' }
   const diffColor = diffColors[book.difficulty] ?? '#c8d0dc'
-  el.innerHTML = `
-    <div class="book-opt-title">${book.title}</div>
-    <div class="book-opt-author">${book.author}</div>
-    <div class="book-opt-meta">
-      <span>${book.chapters.length} chapters</span>
-      <span style="color:${diffColor}">${book.difficulty}</span>
-      ${top > 0 ? `<span class="book-opt-score">★ ${top.toLocaleString()}</span>` : ''}
-    </div>
-  `
-  el.addEventListener('click', () => loadAndStart(idx))
+  const unlocked = isTierUnlocked(book.difficulty)
+
+  // Tier header when difficulty changes
+  if (book.difficulty !== lastDiff) {
+    lastDiff = book.difficulty
+    const header = document.createElement('div')
+    header.className = 'tier-header'
+    header.innerHTML = `<span class="tier-line"></span><span style="color:${diffColor}">${book.difficulty.toUpperCase()}</span><span class="tier-line"></span>`
+    bookList.appendChild(header)
+
+    if (!unlocked) {
+      const hint = document.createElement('div')
+      hint.className = 'tier-hint'
+      hint.textContent = `set a score on any ${UNLOCK_REQ[book.difficulty]} book to unlock`
+      bookList.appendChild(hint)
+    }
+  }
+
+  const top = unlocked ? getTopScore(book.title) : 0
+  const el = document.createElement('div')
+  el.className = 'book-option' + (unlocked ? '' : ' locked')
+
+  if (unlocked) {
+    el.innerHTML = `
+      <div class="book-opt-title">${book.title}</div>
+      <div class="book-opt-author">${book.author}</div>
+      <div class="book-opt-meta">
+        <span>${book.chapters.length} chapters</span>
+        <span style="color:${diffColor}">${book.difficulty}</span>
+        ${top > 0 ? `<span class="book-opt-score">★ ${top.toLocaleString()}</span>` : ''}
+      </div>
+    `
+    el.addEventListener('click', () => loadAndStart(idx))
+  } else {
+    el.innerHTML = `
+      <div class="book-opt-title locked-title">???</div>
+      <div class="book-opt-author">???</div>
+      <div class="book-opt-meta">
+        <span>? chapters</span>
+        <span style="color:${diffColor}">${book.difficulty}</span>
+      </div>
+    `
+  }
+
   bookList.appendChild(el)
 })
 

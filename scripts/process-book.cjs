@@ -306,9 +306,30 @@ for (let c = 0; c < numToExtract; c++) {
     }
   }
 
+  // Merge consecutive short paragraphs so dialogue-heavy sections
+  // don't create tiny brick groups that instantly break off
+  const MIN_MERGE_WORDS = 25
+  const merged = []
+  let buffer = ''
+  for (const p of processed) {
+    if (buffer) buffer += ' ' + p
+    else buffer = p
+    if (buffer.split(' ').length >= MIN_MERGE_WORDS) {
+      merged.push(buffer)
+      buffer = ''
+    }
+  }
+  if (buffer) {
+    if (merged.length > 0 && buffer.split(' ').length < MIN_MERGE_WORDS) {
+      merged[merged.length - 1] += ' ' + buffer
+    } else {
+      merged.push(buffer)
+    }
+  }
+
   chapters.push({
     title: `Chapter ${c + 1}`,
-    paragraphs: processed,
+    paragraphs: merged,
   })
 }
 

@@ -228,6 +228,50 @@
       font-weight: 700;
       text-shadow: 0 0 8px rgba(232, 196, 74, 0.3);
     }
+    .book-option.locked {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+    .book-option.locked:hover {
+      border-color: #1a2030;
+      border-left-color: #1a2030;
+      background: #0a0e16;
+      box-shadow: none;
+    }
+    .book-option.locked:hover .book-opt-title {
+      color: #c8d0dc;
+      text-shadow: none;
+    }
+    .locked-title {
+      letter-spacing: 4px !important;
+    }
+    .tier-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 4px;
+      padding: 12px 0 4px;
+      margin-top: 4px;
+    }
+    .tier-header:first-child {
+      margin-top: 0;
+      padding-top: 0;
+    }
+    .tier-line {
+      flex: 1;
+      height: 1px;
+      background: #1a2030;
+    }
+    .tier-hint {
+      font-size: 9px;
+      color: #374151;
+      letter-spacing: 1px;
+      text-align: center;
+      padding: 2px 0 4px;
+      font-style: italic;
+    }
     /* Sidebar book info */
     #book-info {
       background: #0f1520;

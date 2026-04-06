@@ -38,3 +38,12 @@ export function getTopScore(bookTitle: string): number {
   const scores = getHighScores(bookTitle)
   return scores.length > 0 ? scores[0] : 0
 }
+
+export function clearAllScores(): void {
+  const toRemove: string[] = []
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i)
+    if (key?.startsWith('bb_scores_')) toRemove.push(key)
+  }
+  toRemove.forEach(k => localStorage.removeItem(k))
+}
