@@ -317,15 +317,15 @@ export class Game {
     if (rect.width < 10 || rect.height < 10) return  // guard against layout thrashing
 
     if (this.isMobile) {
-      // Mobile: render at 1.5x DPR for smooth sub-pixel text scrolling
-      // (at 1x, drift is <1 physical pixel/frame → visible stepping)
-      const dpr = Math.min(window.devicePixelRatio || 1, 1.5)
+      // Mobile: render at full device DPR for smooth sub-pixel text scrolling
+      // Drift is <1 canvas pixel/frame at low DPR → text snaps to pixel grid
+      const dpr = window.devicePixelRatio || 1
       const cw = this.canvas.clientWidth || Math.round(rect.width)
       const ch = this.canvas.clientHeight || Math.round(rect.height)
       this.canvas.width = Math.round(cw * dpr)
       this.canvas.height = Math.round(ch * dpr)
-      this.scale = Math.round(cw * dpr) / this.W
-      this.H = Math.round(Math.round(ch * dpr) / this.scale)
+      this.scale = this.canvas.width / this.W
+      this.H = Math.round(this.canvas.height / this.scale)
     } else {
       // Desktop: fit with aspect ratio, center in container
       const scaleW = rect.width / this.W

@@ -74,14 +74,7 @@ async function loadAndStart(bookIdx: number) {
   await new Promise(r => setTimeout(r, 400))
 
   overlay.classList.remove('active')
-  const app = document.getElementById('app')!
-  app.style.display = 'flex'
-  // Force mobile nav bar visible via inline styles (nuclear option)
-  const isMobileView = 'ontouchstart' in window || navigator.maxTouchPoints > 0
-  if (isMobileView) {
-    app.style.flexDirection = 'column'
-    miniStats.style.cssText = 'display:flex;flex-direction:row;align-items:center;justify-content:space-around;height:38px;flex-shrink:0;background:#0c1018;border-bottom:2px solid #e8c44a;padding:0 8px;user-select:none;'
-  }
+  document.getElementById('app')!.style.display = 'flex'
 
   const canvas = document.getElementById('game') as HTMLCanvasElement
   const game = new Game(canvas, bookIdx, tagMap)
