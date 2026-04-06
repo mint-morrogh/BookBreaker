@@ -313,29 +313,31 @@
       color: #374151;
       letter-spacing: 1px;
     }
-    /* Recall button (mobile + desktop fallback) */
+    /* Recall button — large, bottom of screen, mobile only by default */
     #recall-btn {
       display: none;
       position: absolute;
-      bottom: 16px;
-      right: 16px;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
       z-index: 10;
       background: rgba(251, 191, 36, 0.15);
       border: 2px solid #fbbf24;
-      border-radius: 8px;
+      border-radius: 12px;
       color: #fbbf24;
       font-family: 'JetBrains Mono', monospace;
-      font-size: 13px;
+      font-size: 16px;
       font-weight: 700;
-      padding: 10px 18px;
+      padding: 14px 36px;
       cursor: pointer;
-      letter-spacing: 2px;
+      letter-spacing: 3px;
       text-transform: uppercase;
       touch-action: manipulation;
-      box-shadow: 0 0 20px rgba(251, 191, 36, 0.2);
+      box-shadow: 0 0 24px rgba(251, 191, 36, 0.25);
     }
     #recall-btn:active {
-      background: rgba(251, 191, 36, 0.3);
+      background: rgba(251, 191, 36, 0.35);
+      transform: translateX(-50%) scale(0.95);
     }
     /* Mini stats strip (mobile — always visible on right edge) */
     #mini-stats {
@@ -343,30 +345,35 @@
       position: fixed;
       top: 0;
       right: 0;
-      width: 44px;
+      width: 52px;
       height: 100%;
       z-index: 45;
-      background: rgba(12, 16, 24, 0.85);
+      background: rgba(12, 16, 24, 0.9);
       border-left: 1px solid #1a2030;
       flex-direction: column;
       align-items: center;
-      padding: 10px 0;
-      gap: 8px;
+      padding: 12px 2px;
+      gap: 12px;
       user-select: none;
       touch-action: manipulation;
     }
     .mini-stat {
       text-align: center;
-      font-size: 8px;
+      font-size: 7px;
       color: #4a5568;
       letter-spacing: 1px;
       text-transform: uppercase;
       line-height: 1;
+      width: 100%;
+      overflow: hidden;
     }
     .mini-stat-val {
-      font-size: 13px;
+      font-size: 11px;
       font-weight: 700;
-      margin-top: 2px;
+      margin-top: 3px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .mini-stat-val.score { color: #7dd3fc; }
     .mini-stat-val.lives { color: #f87171; }
@@ -374,10 +381,14 @@
     .mini-stat-val.words { color: #a78bfa; }
     #mini-stats-open {
       margin-top: auto;
-      font-size: 16px;
+      font-size: 22px;
       color: #e8c44a;
       cursor: pointer;
-      padding: 6px;
+      padding: 12px 6px;
+      border-top: 1px solid #1a2030;
+      width: 100%;
+      text-align: center;
+      touch-action: manipulation;
     }
     /* Sidebar backdrop (mobile only) */
     #sidebar-backdrop {
@@ -422,7 +433,7 @@
         display: none;
       }
       #game-area {
-        margin-right: 44px;
+        margin-right: 52px;
       }
     }
   </style>

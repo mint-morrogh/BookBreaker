@@ -1351,13 +1351,14 @@ export class Game {
     sidebarEls.progressBar.style.width = `${pct}%`
     sidebarEls.progressText.textContent = `${pct}%`
 
-    // Mini stats strip (mobile)
+    // Mini stats strip (mobile) — abbreviate large numbers
     const ms = document.getElementById('mini-score')
     if (ms) {
-      ms.textContent = scoreStr
+      const abbrev = (n: number) => n >= 100000 ? (n / 1000).toFixed(0) + 'k' : n >= 10000 ? (n / 1000).toFixed(1) + 'k' : String(n)
+      ms.textContent = abbrev(this.score)
       document.getElementById('mini-lives')!.textContent = livesStr
       document.getElementById('mini-combo')!.textContent = comboStr
-      document.getElementById('mini-words')!.textContent = wordsStr
+      document.getElementById('mini-words')!.textContent = abbrev(this.wordsBroken)
     }
 
     // Recall button visibility
