@@ -2,14 +2,23 @@ import { Game, getTopScore } from './game'
 import { BOOKS } from './content'
 import { tagBook } from './tagger'
 
-// Sidebar toggle (mobile)
+// Sidebar toggle (mobile) — pauses game when open
 const sidebar = document.getElementById('sidebar')!
 const sidebarBackdrop = document.getElementById('sidebar-backdrop')!
 const miniStatsOpen = document.getElementById('mini-stats-open')!
+let activeGame: Game | null = null
 
 function toggleSidebar() {
+  const opening = !sidebar.classList.contains('open')
   sidebar.classList.toggle('open')
   sidebarBackdrop.classList.toggle('open')
+  if (activeGame) {
+    if (opening) {
+      activeGame.paused = true
+    } else {
+      activeGame.paused = false
+    }
+  }
 }
 miniStatsOpen.addEventListener('click', toggleSidebar)
 miniStatsOpen.addEventListener('touchstart', (e) => { e.preventDefault(); toggleSidebar() })
@@ -72,6 +81,7 @@ async function loadAndStart(bookIdx: number) {
 
   const canvas = document.getElementById('game') as HTMLCanvasElement
   const game = new Game(canvas, bookIdx, tagMap)
+  activeGame = game
 
   let last = 0
   function loop(time: number) {

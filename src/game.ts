@@ -130,7 +130,7 @@ export class Game {
   private hasLaunched = false    // true after first launch this run
   private hasRecalled = false    // true after first recall this run
   private gameOver = false
-  private paused = false
+  paused = false
   private sidebarTimer = 0
   private purgeTimer = 0
   private islandCheckTimer = 0
