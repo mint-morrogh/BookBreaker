@@ -12,8 +12,9 @@ function toggleSidebar() {
   const opening = !sidebar.classList.contains('open')
   sidebar.classList.toggle('open')
   sidebarBackdrop.classList.toggle('open')
-  if (activeGame) {
-    activeGame.paused = opening
+  // Always pause when interacting with nav — game's tap-to-unpause handles resume
+  if (activeGame && opening) {
+    activeGame.paused = true
   }
 }
 // Entire top nav bar is tappable
