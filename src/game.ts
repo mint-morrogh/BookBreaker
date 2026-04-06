@@ -315,27 +315,32 @@ export class Game {
   private resize() {
     const rect = this.canvas.parentElement!.getBoundingClientRect()
 
-    // Scale to fill container — extend virtual height when width-constrained
-    const scaleW = rect.width / this.W
-    const scaleH = rect.height / VIRTUAL_H
-    if (scaleW <= scaleH) {
-      // Width-constrained (portrait/mobile) — fill screen vertically
-      this.scale = scaleW
-      this.H = Math.round(rect.height / this.scale)
+    if (this.isMobile) {
+      // Mobile: CSS handles 100% fill — read actual rendered size
+      const cw = this.canvas.clientWidth || Math.round(rect.width)
+      const ch = this.canvas.clientHeight || Math.round(rect.height)
+      this.canvas.width = cw
+      this.canvas.height = ch
+      this.scale = cw / this.W
+      this.H = Math.round(ch / this.scale)
     } else {
-      // Height-constrained (landscape/desktop) — standard aspect ratio
-      this.scale = scaleH
-      this.H = VIRTUAL_H
+      // Desktop: fit with aspect ratio, center in container
+      const scaleW = rect.width / this.W
+      const scaleH = rect.height / VIRTUAL_H
+      if (scaleW <= scaleH) {
+        this.scale = scaleW
+        this.H = Math.round(rect.height / this.scale)
+      } else {
+        this.scale = scaleH
+        this.H = VIRTUAL_H
+      }
+      const physW = Math.round(this.W * this.scale)
+      const physH = Math.round(this.H * this.scale)
+      this.canvas.width = physW
+      this.canvas.height = physH
+      this.canvas.style.width = physW + 'px'
+      this.canvas.style.height = physH + 'px'
     }
-
-    const physW = Math.round(this.W * this.scale)
-    const physH = Math.round(this.H * this.scale)
-
-    // Render at CSS pixel size (1:1 mapping) — no DPR scaling
-    this.canvas.width = physW
-    this.canvas.height = physH
-    this.canvas.style.width = physW + 'px'
-    this.canvas.style.height = physH + 'px'
     this.ctx.setTransform(this.scale, 0, 0, this.scale, 0, 0)
 
     // Scale drift speed proportional to field height so timing stays consistent
