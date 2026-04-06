@@ -543,71 +543,70 @@ export class Game {
   }
 
   private recallBall() {
-    const ball = this.balls.find(b => !b.stuck)
-    if (!ball) return
+    const activeBalls = this.balls.filter(b => !b.stuck)
+    if (activeBalls.length === 0) return
     this.hasRecalled = true
 
-    // Check if path to paddle is clear — raycast for bricks in the way
-    const targetX = this.paddleX + this.paddleW / 2
-    const targetY = this.paddleY + this.paddleH / 2
-    const dx = targetX - ball.x
-    const dy = targetY - ball.y
-    const dist = Math.sqrt(dx * dx + dy * dy)
+    // Recall ALL active balls
+    for (const ball of activeBalls) {
+      const targetX = this.paddleX + this.paddleW / 2
+      const targetY = this.paddleY + this.paddleH / 2
+      const dx = targetX - ball.x
+      const dy = targetY - ball.y
+      const dist = Math.sqrt(dx * dx + dy * dy)
 
-    let pathBlocked = false
-    if (dist > 1) {
-      const steps = Math.ceil(dist / 5)
-      const stepX = dx / steps
-      const stepY = dy / steps
-      for (let i = 0; i <= steps; i++) {
-        const px = ball.x + stepX * i
-        const py = ball.y + stepY * i
-        for (const brick of this.bricks) {
-          if (!brick.alive) continue
-          const by = brick.y - this.bricksScrollY
-          if (px > brick.x && px < brick.x + brick.w && py > by && py < by + brick.h) {
-            pathBlocked = true
-            break
+      let pathBlocked = false
+      if (dist > 1) {
+        const steps = Math.ceil(dist / 5)
+        const stepX = dx / steps
+        const stepY = dy / steps
+        for (let i = 0; i <= steps; i++) {
+          const px = ball.x + stepX * i
+          const py = ball.y + stepY * i
+          for (const brick of this.bricks) {
+            if (!brick.alive) continue
+            const by = brick.y - this.bricksScrollY
+            if (px > brick.x && px < brick.x + brick.w && py > by && py < by + brick.h) {
+              pathBlocked = true
+              break
+            }
           }
+          if (pathBlocked) break
         }
-        if (pathBlocked) break
       }
-    }
 
-    if (pathBlocked) {
-      // Path isn't clear — redirect ball toward paddle, let physics handle the rest
-      const speed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy)
-      const angle = Math.atan2(dy, dx)
-      ball.vx = Math.cos(angle) * speed
-      ball.vy = Math.sin(angle) * speed
-      // Gold flash to show recall was triggered
-      this.particles.push({
-        x: ball.x, y: ball.y,
-        vx: 0, vy: -30,
-        char: '↑ RECALL', life: 0.6, maxLife: 0.6,
-        color: '#fbbf24', size: 12,
-      })
-      this.charge = 0
-    } else {
-      // Clear path — teleport ball home
-      // Gold streak particles along path
-      for (let i = 0; i < 20; i++) {
-        const t = i / 20
+      if (pathBlocked) {
+        // Path blocked — redirect toward paddle
+        const speed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy)
+        const angle = Math.atan2(dy, dx)
+        ball.vx = Math.cos(angle) * speed
+        ball.vy = Math.sin(angle) * speed
         this.particles.push({
-          x: ball.x + dx * t, y: ball.y + dy * t,
-          vx: (Math.random() - 0.5) * 40, vy: (Math.random() - 0.5) * 40,
-          char: '✦', life: 0.6, maxLife: 0.8,
-          color: '#fbbf24', size: 10 + Math.random() * 6,
+          x: ball.x, y: ball.y,
+          vx: 0, vy: -30,
+          char: '↑ RECALL', life: 0.6, maxLife: 0.6,
+          color: '#fbbf24', size: 12,
         })
+      } else {
+        // Clear path — teleport home
+        for (let i = 0; i < 10; i++) {
+          const t = i / 10
+          this.particles.push({
+            x: ball.x + dx * t, y: ball.y + dy * t,
+            vx: (Math.random() - 0.5) * 40, vy: (Math.random() - 0.5) * 40,
+            char: '✦', life: 0.6, maxLife: 0.8,
+            color: '#fbbf24', size: 10 + Math.random() * 6,
+          })
+        }
+        ball.x = targetX
+        ball.y = this.paddleY + this.paddleH + ball.r + 2
+        ball.stuck = true
+        ball.trail = []
+        ball.backWallHits = 0
+        ball.slamStacks = 0
       }
-      ball.x = targetX
-      ball.y = this.paddleY + this.paddleH + ball.r + 2
-      ball.stuck = true
-      ball.trail = []
-      ball.backWallHits = 0
-      ball.slamStacks = 0
-      this.charge = 0
     }
+    this.charge = 0
   }
 
   // ── Update ──────────────────────────────────────────────────

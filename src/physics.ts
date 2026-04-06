@@ -37,10 +37,17 @@ export function updateBalls(
 ): PhysicsEvent[] {
   const events: PhysicsEvent[] = []
 
+  // Count stuck balls for side-by-side positioning
+  const stuckBalls = balls.filter(b => b.stuck)
+  let stuckIdx = 0
   for (const ball of balls) {
     if (ball.stuck) {
-      ball.x = state.paddleX + state.paddleW / 2
+      // Spread stuck balls side-by-side across paddle
+      const spacing = Math.min(20, state.paddleW / (stuckBalls.length + 1))
+      const offset = (stuckIdx - (stuckBalls.length - 1) / 2) * spacing
+      ball.x = state.paddleX + state.paddleW / 2 + offset
       ball.y = state.paddleY + state.paddleH + ball.r + 2
+      stuckIdx++
       continue
     }
 
