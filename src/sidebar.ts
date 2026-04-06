@@ -46,9 +46,11 @@ export function logWord(word: string, points: number) {
   wordLogDirty = true
 }
 
-// Flush deferred sort — called from throttled sidebar update, not per brick
+// Flush deferred sort — only when sidebar is visible (skip DOM churn when hidden)
 export function flushWordLog() {
   if (!wordLogDirty) return
+  const sidebar = document.getElementById('sidebar')
+  if (sidebar && !sidebar.classList.contains('open')) return
   wordLogDirty = false
   const sorted = [...wordMap.values()].sort((a, b) => b.totalPoints - a.totalPoints)
   for (const entry of sorted) {

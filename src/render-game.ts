@@ -146,7 +146,7 @@ export function renderGame(
   }
   ctx.globalAlpha = 1
 
-  // Particles — on mobile, skip shadow on fading particles (shadowBlur is CPU-expensive)
+  // Particles — skip shadowBlur entirely on mobile (100+ blur passes kills GPU)
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
   for (const p of state.particles) {
@@ -154,14 +154,12 @@ export function renderGame(
     ctx.globalAlpha = lifeRatio
     ctx.fillStyle = p.color
     ctx.font = `bold ${p.size * (0.5 + lifeRatio * 0.5)}px 'JetBrains Mono', monospace`
-    if (!state.isMobile || lifeRatio > 0.5) {
+    if (!state.isMobile) {
       ctx.shadowColor = p.color
       ctx.shadowBlur = 12 * lifeRatio
-      ctx.fillText(p.char, p.x, p.y)
-      ctx.shadowBlur = 0
-    } else {
-      ctx.fillText(p.char, p.x, p.y)
     }
+    ctx.fillText(p.char, p.x, p.y)
+    if (!state.isMobile) ctx.shadowBlur = 0
   }
   ctx.globalAlpha = 1
 
