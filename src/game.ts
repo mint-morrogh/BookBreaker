@@ -647,8 +647,9 @@ export class Game {
       }
       // Tick particles + fade bricks
       this.tickParticlesAndFade(dt)
-      // When done popping, move to tally
-      if (this.endPopIdx >= this.endPopBricks.length && this.endTimer > this.endPopBricks.length / popsPerSec + 0.5) {
+      // When done popping, move to tally (min 1s pause to see final explosions)
+      const popDuration = this.endPopBricks.length / popsPerSec + 0.5
+      if (this.endPopIdx >= this.endPopBricks.length && this.endTimer > Math.max(popDuration, 1.0)) {
         this.levelState = 'endTally'
         this.endTimer = 0
       }
@@ -1236,8 +1237,10 @@ export class Game {
     this.endGrade = ''
     this.endTimer = 0
     this.endTotalWords = this.totalWordsInParagraph
-    this.endBrokenWords = this.wordsBroken
-    this.levelState = this.endPopBricks.length > 0 ? 'endPopping' : 'endTally'
+    // Broken = words placed as bricks minus those still alive
+    this.endBrokenWords = this.wordCursor - this.endPopBricks.length
+    // Always start with endPopping phase (gives time to see final explosions)
+    this.levelState = 'endPopping'
     for (const ball of this.balls) { ball.stuck = true; ball.trail = [] }
   }
 
