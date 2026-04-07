@@ -311,14 +311,13 @@ export function renderGame(
     }
     ctx.globalAlpha = 1
 
-    // Ball body
+    // Ball body — canvas arc for sub-pixel smooth motion
     ctx.fillStyle = ballColor
     ctx.shadowColor = ballColor
     ctx.shadowBlur = 15 + intensity * 3
-    ctx.font = `bold ${ball.r * 2.5}px 'JetBrains Mono', monospace`
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText('●', ball.x, ball.y)
+    ctx.beginPath()
+    ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2)
+    ctx.fill()
     ctx.shadowBlur = 0
 
     // Blast charge indicator — pulsing orange ring

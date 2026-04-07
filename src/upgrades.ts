@@ -30,6 +30,8 @@ export interface UpgradeState {
   levelWords: { word: string; color: string; points: number }[]
   gold: number
   dropBonus: number   // flat % added to all upgrade drop chances (from shop)
+  maxWiden: number
+  maxSafety: number
 }
 
 // ── Events returned so game.ts can apply mutations ─────────────
@@ -43,7 +45,7 @@ export function activateUpgrade(pickup: Pickup, state: UpgradeState): UpgradeEve
 
   if (pickup.type === 'widen') {
     const addPerSide = pickup.tier  // tier 1→+1, tier 2→+2, etc.
-    state.widenLevel += addPerSide
+    state.widenLevel = Math.min(state.maxWiden, state.widenLevel + addPerSide)
     const equals = '═'.repeat(state.widenLevel)
     const paddleText = `${equals} BOOK BREAKER ${equals}`
     events.push({ type: 'measurePaddle', paddleText })
@@ -93,7 +95,7 @@ export function activateUpgrade(pickup: Pickup, state: UpgradeState): UpgradeEve
     }
   } else if (pickup.type === 'safety') {
     const wasFresh = state.safetyHits === 0
-    state.safetyHits = Math.min(9, state.safetyHits + pickup.tier)
+    state.safetyHits = Math.min(state.maxSafety, state.safetyHits + pickup.tier)
     events.push({ type: 'measureSafety' })
     if (wasFresh) {
       // Caller will set safetyX based on the newly measured safetyW
@@ -176,7 +178,7 @@ export function hitBrick(brick: Brick, ball: Ball, state: UpgradeState): void {
       vy: -80 - Math.random() * 30,
       char: `+${goldAmt} ◆`,
       life: 0.8, maxLife: 0.8,
-      color: '#fbbf24', size: 11,
+      color: '#fbbf24', size: 16,
     })
   }
 
@@ -209,14 +211,29 @@ export function hitBrick(brick: Brick, ball: Ball, state: UpgradeState): void {
   const tier = colorTier(brick.color)
   if (tier > 0 && Math.random() < dropChance(tier) + state.dropBonus) {
     const brickScreenY = brick.y - state.bricksScrollY
-    const roll = Math.random()
-    let type: UpgradeType
-    if (roll < 0.22) type = 'widen'
-    else if (roll < 0.40) type = 'multiball'
-    else if (roll < 0.55) type = 'safety'
-    else if (roll < 0.70) type = 'blast'
-    else if (roll < 0.85) type = 'freeze'
-    else type = 'piercing'
+
+    // Build pool of eligible drop types, excluding maxed upgrades
+    type DropEntry = { type: UpgradeType; weight: number }
+    const dropPool: DropEntry[] = [
+      { type: 'multiball', weight: 0.18 },
+      { type: 'blast', weight: 0.15 },
+      { type: 'freeze', weight: 0.15 },
+      { type: 'piercing', weight: 0.15 },
+    ]
+    if (state.widenLevel < state.maxWiden) dropPool.push({ type: 'widen', weight: 0.22 })
+    if (state.safetyHits < state.maxSafety) dropPool.push({ type: 'safety', weight: 0.15 })
+
+    if (dropPool.length === 0) return  // everything maxed, skip drop
+
+    // Weighted random pick from remaining pool
+    const totalWeight = dropPool.reduce((s, d) => s + d.weight, 0)
+    let roll = Math.random() * totalWeight
+    let type: UpgradeType = dropPool[0].type
+    for (const entry of dropPool) {
+      roll -= entry.weight
+      if (roll <= 0) { type = entry.type; break }
+    }
+
     state.pickups.push({
       label: UPGRADE_LABELS[type],
       x: brick.x + brick.w / 2,
@@ -271,4 +288,28 @@ export function checkAlphabetBonus(state: UpgradeState): void {
       size: 24,
     })
   }
+
+  // Center text: "+1 LIFE" and "ALL LETTERS COLLECTED"
+  state.particles.push({
+    x: state.W / 2,
+    y: state.H / 2 - 16,
+    vx: 0,
+    vy: -20,
+    char: '+1 LIFE',
+    life: 2.5,
+    maxLife: 2.5,
+    color: '#4ade80',
+    size: 28,
+  })
+  state.particles.push({
+    x: state.W / 2,
+    y: state.H / 2 + 18,
+    vx: 0,
+    vy: -20,
+    char: 'ALL LETTERS COLLECTED',
+    life: 2.5,
+    maxLife: 2.5,
+    color: '#fbbf24',
+    size: 14,
+  })
 }

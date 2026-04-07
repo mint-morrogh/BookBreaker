@@ -78,4 +78,5 @@ export interface ShopItem {
   price: number
   rarity: ShopRarity
   bought: boolean
+  maxed?: boolean
 }

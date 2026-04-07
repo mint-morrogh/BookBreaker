@@ -1,7 +1,8 @@
 import { Game, getTopScore } from './game'
-import { BOOKS } from './content'
+import { BOOKS, makeCustomBook, addCustomBook, removeCustomBook } from './content'
 import { tagBook } from './tagger'
 import { clearAllScores } from './scoring'
+import { parseFile, detectFormat, ACCEPTED_EXTENSIONS } from './book-parser'
 
 // One-time migration: clear old scores for unlock system
 if (!localStorage.getItem('bb_unlock_v1')) {
@@ -33,87 +34,377 @@ function toggleSidebar() {
   const opening = !sidebar.classList.contains('open')
   sidebar.classList.toggle('open')
   sidebarBackdrop.classList.toggle('open')
-  // Always pause when interacting with nav — game's tap-to-unpause handles resume
   if (activeGame && opening) {
     activeGame.paused = true
   }
 }
-// Entire top nav bar is tappable
 miniStats.addEventListener('click', toggleSidebar)
 miniStats.addEventListener('touchstart', (e) => { e.preventDefault(); toggleSidebar() })
 sidebarBackdrop.addEventListener('click', toggleSidebar)
 
-// Populate book picker
+// ── Screen management ──────────────────────────────────────────
+const mainMenu = document.getElementById('main-menu')!
+const confirmForfeit = document.getElementById('confirm-forfeit')!
+const bookPicker = document.getElementById('book-picker')!
+const importOverlay = document.getElementById('import-overlay')!
+
+function hideAll() {
+  mainMenu.style.display = 'none'
+  confirmForfeit.style.display = 'none'
+  bookPicker.style.display = 'none'
+  importOverlay.style.display = 'none'
+  document.getElementById('app')!.style.display = 'none'
+}
+
+// ── Main menu ──────────────────────────────────────────────────
+function showMainMenu() {
+  hideAll()
+  const save = Game.loadFromStorage()
+  const menuBtns = document.getElementById('menu-buttons')!
+  const subtitle = document.getElementById('menu-subtitle')!
+  menuBtns.innerHTML = ''
+
+  if (save) {
+    const book = BOOKS[save.bookIdx]
+    const chapter = book?.chapters[save.chapterIdx]
+    const chLabel = chapter ? `Ch ${save.chapterIdx + 1}, P${save.paragraphIdx + 1}` : ''
+    subtitle.textContent = ''
+
+    const info = document.createElement('div')
+    info.className = 'menu-save-info'
+    info.innerHTML = `saved run: <strong style="color:#e8c44a">${book?.title ?? 'Unknown'}</strong><br>${chLabel} · ${save.score.toLocaleString()} pts · ${save.lives} lives · ${save.gold} gold`
+    menuBtns.appendChild(info)
+
+    const contBtn = document.createElement('button')
+    contBtn.className = 'menu-btn'
+    contBtn.textContent = 'CONTINUE RUN'
+    contBtn.addEventListener('click', () => loadAndStart(save.bookIdx, save))
+    menuBtns.appendChild(contBtn)
+
+    const newBtn = document.createElement('button')
+    newBtn.className = 'menu-btn muted'
+    newBtn.textContent = 'NEW RUN'
+    newBtn.addEventListener('click', () => showForfeitConfirm())
+    menuBtns.appendChild(newBtn)
+
+    const importBtn = document.createElement('button')
+    importBtn.className = 'menu-btn muted'
+    importBtn.textContent = 'IMPORT BOOK'
+    importBtn.addEventListener('click', showImportOverlay)
+    menuBtns.appendChild(importBtn)
+  } else {
+    subtitle.textContent = ''
+    const newBtn = document.createElement('button')
+    newBtn.className = 'menu-btn'
+    newBtn.textContent = 'NEW RUN'
+    newBtn.addEventListener('click', () => showBookPicker())
+    menuBtns.appendChild(newBtn)
+
+    const importBtn = document.createElement('button')
+    importBtn.className = 'menu-btn muted'
+    importBtn.textContent = 'IMPORT BOOK'
+    importBtn.addEventListener('click', showImportOverlay)
+    menuBtns.appendChild(importBtn)
+  }
+
+  mainMenu.style.display = 'flex'
+}
+
+// ── Forfeit confirmation ───────────────────────────────────────
+function showForfeitConfirm() {
+  hideAll()
+  const btns = document.getElementById('forfeit-buttons')!
+  btns.innerHTML = ''
+
+  const yesBtn = document.createElement('button')
+  yesBtn.className = 'menu-btn danger'
+  yesBtn.textContent = 'YES, START OVER'
+  yesBtn.addEventListener('click', () => {
+    Game.clearSave()
+    showBookPicker()
+  })
+  btns.appendChild(yesBtn)
+
+  const noBtn = document.createElement('button')
+  noBtn.className = 'menu-btn muted'
+  noBtn.textContent = 'GO BACK'
+  noBtn.addEventListener('click', () => showMainMenu())
+  btns.appendChild(noBtn)
+
+  confirmForfeit.style.display = 'flex'
+}
+
+// ── Book picker ────────────────────────────────────────────────
+function showBookPicker() {
+  hideAll()
+  renderBookList()
+  bookPicker.style.display = 'flex'
+}
+
 const bookList = document.getElementById('book-list')!
-const diffColors: Record<string, string> = { Easy: '#4ade80', Medium: '#fbbf24', Hard: '#f97316', 'Very Hard': '#f87171' }
+const diffColors: Record<string, string> = { Easy: '#4ade80', Medium: '#fbbf24', Hard: '#f97316', 'Very Hard': '#f87171', Custom: '#c084fc' }
 
-let lastDiff = ''
-BOOKS.forEach((book, idx) => {
-  const diffColor = diffColors[book.difficulty] ?? '#c8d0dc'
-  const unlocked = isTierUnlocked(book.difficulty)
+function renderBookList() {
+  bookList.innerHTML = ''
+  let lastDiff = ''
+  BOOKS.forEach((book, idx) => {
+    const diffColor = diffColors[book.difficulty] ?? '#c8d0dc'
+    const unlocked = book.difficulty === 'Custom' || isTierUnlocked(book.difficulty)
 
-  // Tier header when difficulty changes
-  if (book.difficulty !== lastDiff) {
-    lastDiff = book.difficulty
-    const header = document.createElement('div')
-    header.className = 'tier-header'
-    header.innerHTML = `<span class="tier-line"></span><span style="color:${diffColor}">${book.difficulty.toUpperCase()}</span><span class="tier-line"></span>`
-    bookList.appendChild(header)
+    if (book.difficulty !== lastDiff) {
+      lastDiff = book.difficulty
+      const header = document.createElement('div')
+      header.className = 'tier-header'
+      header.innerHTML = `<span class="tier-line"></span><span style="color:${diffColor}">${book.difficulty.toUpperCase()}</span><span class="tier-line"></span>`
+      bookList.appendChild(header)
 
-    if (!unlocked) {
-      const hint = document.createElement('div')
-      hint.className = 'tier-hint'
-      hint.textContent = `set a score on any ${UNLOCK_REQ[book.difficulty]} book to unlock`
-      bookList.appendChild(hint)
+      if (!unlocked) {
+        const hint = document.createElement('div')
+        hint.className = 'tier-hint'
+        hint.textContent = `set a score on any ${UNLOCK_REQ[book.difficulty]} book to unlock`
+        bookList.appendChild(hint)
+      }
+    }
+
+    const top = unlocked ? getTopScore(book.title) : 0
+    const el = document.createElement('div')
+    el.className = 'book-option' + (unlocked ? '' : ' locked')
+
+    if (unlocked) {
+      const isCustom = book.difficulty === 'Custom'
+      el.innerHTML = `
+        <div class="book-opt-title">${book.title}</div>
+        <div class="book-opt-author">${book.author || 'Unknown'}</div>
+        <div class="book-opt-meta">
+          <span>${book.chapters.length} chapters</span>
+          <span style="color:${diffColor}">${book.difficulty}</span>
+          ${top > 0 ? `<span class="book-opt-score">★ ${top.toLocaleString()}</span>` : ''}
+          ${isCustom ? '<span class="book-opt-delete">✕</span>' : ''}
+        </div>
+      `
+      el.addEventListener('click', (e) => {
+        if (isCustom && (e.target as HTMLElement).classList.contains('book-opt-delete')) {
+          removeCustomBook(idx)
+          renderBookList()
+          return
+        }
+        loadAndStart(idx)
+      })
+    } else {
+      el.innerHTML = `
+        <div class="book-opt-title locked-title">???</div>
+        <div class="book-opt-author">???</div>
+        <div class="book-opt-meta">
+          <span>? chapters</span>
+          <span style="color:${diffColor}">${book.difficulty}</span>
+        </div>
+      `
+    }
+
+    bookList.appendChild(el)
+  })
+
+  // Import button at the bottom
+  const importBtn = document.createElement('button')
+  importBtn.className = 'menu-btn'
+  importBtn.style.marginTop = '16px'
+  importBtn.style.width = '100%'
+  importBtn.textContent = '+ IMPORT YOUR OWN BOOK'
+  importBtn.addEventListener('click', showImportOverlay)
+  bookList.appendChild(importBtn)
+}
+
+// ── Import overlay ────────────────────────────────────────────
+const importTitle = document.getElementById('import-title') as HTMLInputElement
+const importAuthor = document.getElementById('import-author') as HTMLInputElement
+const importText = document.getElementById('import-text') as HTMLTextAreaElement
+const importFile = document.getElementById('import-file') as HTMLInputElement
+const importDropZone = document.getElementById('import-drop-zone')!
+const importInfo = document.getElementById('import-info')!
+const importSubmit = document.getElementById('import-submit') as HTMLButtonElement
+const importCancel = document.getElementById('import-cancel')!
+const dropLabel = document.getElementById('drop-label')!
+
+// Track the pending parsed file (for EPUB/DOCX which can't show in textarea)
+let pendingParsed: Awaited<ReturnType<typeof parseFile>> | null = null
+
+// Update accepted file types
+importFile.setAttribute('accept', ACCEPTED_EXTENSIONS)
+
+function showImportOverlay() {
+  hideAll()
+  importTitle.value = ''
+  importAuthor.value = ''
+  importText.value = ''
+  importFile.value = ''
+  importInfo.textContent = ''
+  importSubmit.disabled = true
+  pendingParsed = null
+  importText.style.display = ''
+  dropLabel.textContent = 'drop a file here or click to browse'
+  importOverlay.style.display = 'flex'
+}
+
+function updateImportState() {
+  const hasTitle = importTitle.value.trim().length > 0
+  if (pendingParsed) {
+    // File-based import (EPUB/DOCX/HTML) — title required, content already parsed
+    importSubmit.disabled = !hasTitle
+  } else {
+    // Text-based import — need enough text + title
+    const hasText = importText.value.trim().length > 50
+    importSubmit.disabled = !(hasText && hasTitle)
+    if (hasText) {
+      const wordCount = importText.value.trim().split(/\s+/).length
+      importInfo.textContent = `${wordCount.toLocaleString()} words detected`
+    } else if (!importInfo.textContent.includes('chapters')) {
+      importInfo.textContent = ''
     }
   }
+}
 
-  const top = unlocked ? getTopScore(book.title) : 0
-  const el = document.createElement('div')
-  el.className = 'book-option' + (unlocked ? '' : ' locked')
-
-  if (unlocked) {
-    el.innerHTML = `
-      <div class="book-opt-title">${book.title}</div>
-      <div class="book-opt-author">${book.author}</div>
-      <div class="book-opt-meta">
-        <span>${book.chapters.length} chapters</span>
-        <span style="color:${diffColor}">${book.difficulty}</span>
-        ${top > 0 ? `<span class="book-opt-score">★ ${top.toLocaleString()}</span>` : ''}
-      </div>
-    `
-    el.addEventListener('click', () => loadAndStart(idx))
-  } else {
-    el.innerHTML = `
-      <div class="book-opt-title locked-title">???</div>
-      <div class="book-opt-author">???</div>
-      <div class="book-opt-meta">
-        <span>? chapters</span>
-        <span style="color:${diffColor}">${book.difficulty}</span>
-      </div>
-    `
+importTitle.addEventListener('input', updateImportState)
+importText.addEventListener('input', () => {
+  // If user edits the textarea, clear any pending file parse
+  if (pendingParsed) {
+    pendingParsed = null
+    importText.style.display = ''
   }
-
-  bookList.appendChild(el)
+  updateImportState()
 })
 
-async function loadAndStart(bookIdx: number) {
+// File upload
+importDropZone.addEventListener('click', () => importFile.click())
+importFile.addEventListener('change', () => {
+  const file = importFile.files?.[0]
+  if (file) handleFileImport(file)
+})
+
+// Drag & drop
+importDropZone.addEventListener('dragover', (e) => {
+  e.preventDefault()
+  importDropZone.classList.add('dragover')
+})
+importDropZone.addEventListener('dragleave', () => {
+  importDropZone.classList.remove('dragover')
+})
+importDropZone.addEventListener('drop', (e) => {
+  e.preventDefault()
+  importDropZone.classList.remove('dragover')
+  const file = e.dataTransfer?.files[0]
+  if (file) handleFileImport(file)
+})
+
+async function handleFileImport(file: File) {
+  const fmt = detectFormat(file.name)
+  dropLabel.textContent = file.name
+
+  if (!fmt) {
+    importInfo.textContent = 'unsupported format'
+    importInfo.style.color = '#f87171'
+    setTimeout(() => { importInfo.style.color = '' }, 2000)
+    return
+  }
+
+  const formatLabel = fmt.toUpperCase()
+
+  if (fmt === 'txt') {
+    // Plain text — read into textarea for editing
+    pendingParsed = null
+    importText.style.display = ''
+    const text = await file.text()
+    importText.value = text
+    if (!importTitle.value.trim()) {
+      importTitle.value = file.name.replace(/\.[^.]+$/, '').replace(/[-_]/g, ' ')
+    }
+    updateImportState()
+    return
+  }
+
+  // Binary/structured formats — parse directly
+  importInfo.textContent = `parsing ${formatLabel}...`
+  importSubmit.disabled = true
+
+  try {
+    const parsed = await parseFile(file)
+    pendingParsed = parsed
+
+    // Auto-fill title and author from file metadata
+    if (!importTitle.value.trim() && parsed.title) {
+      importTitle.value = parsed.title
+    }
+    if (!importAuthor.value.trim() && parsed.author) {
+      importAuthor.value = parsed.author
+    }
+
+    // Show preview in textarea (read-only summary)
+    const totalWords = parsed.chapters.reduce(
+      (sum, ch) => sum + ch.paragraphs.reduce((s, p) => s + p.split(/\s+/).length, 0), 0
+    )
+    const totalParagraphs = parsed.chapters.reduce((sum, ch) => sum + ch.paragraphs.length, 0)
+
+    // Show a preview of the parsed content
+    const preview = parsed.chapters.map(ch => {
+      const firstP = ch.paragraphs[0] ?? ''
+      const snippet = firstP.length > 80 ? firstP.slice(0, 80) + '...' : firstP
+      return `[${ch.title}] (${ch.paragraphs.length} paragraphs)\n  ${snippet}`
+    }).join('\n\n')
+    importText.value = preview
+    importText.style.display = ''
+
+    importInfo.textContent = `${formatLabel}: ${parsed.chapters.length} chapters, ${totalParagraphs.toLocaleString()} paragraphs, ${totalWords.toLocaleString()} words`
+    updateImportState()
+  } catch (err) {
+    pendingParsed = null
+    importInfo.textContent = `failed to parse ${formatLabel}: ${(err as Error).message}`
+    importInfo.style.color = '#f87171'
+    setTimeout(() => { importInfo.style.color = '' }, 3000)
+  }
+}
+
+// Submit
+importSubmit.addEventListener('click', () => {
+  const title = importTitle.value.trim()
+  const author = importAuthor.value.trim() || 'Unknown'
+
+  if (pendingParsed) {
+    // File-based import — use pre-parsed chapters
+    if (!title) return
+    const book = makeCustomBook(title, author, pendingParsed.chapters)
+    const idx = addCustomBook(book)
+    pendingParsed = null
+    loadAndStart(idx)
+  } else {
+    // Text-based import — parse the textarea content
+    const text = importText.value.trim()
+    if (!title || text.length < 50) return
+    // Use parseFile with a synthetic text file
+    const blob = new File([text], 'import.txt', { type: 'text/plain' })
+    parseFile(blob).then(parsed => {
+      const book = makeCustomBook(title, author, parsed.chapters)
+      const idx = addCustomBook(book)
+      loadAndStart(idx)
+    })
+  }
+})
+
+importCancel.addEventListener('click', showBookPicker)
+
+// ── Load and start game ────────────────────────────────────────
+async function loadAndStart(bookIdx: number, save?: ReturnType<Game['getSaveState']> | null) {
   const book = BOOKS[bookIdx]
   const overlay = document.getElementById('loading-overlay')!
   const bar = document.getElementById('loading-bar')!
   const status = document.getElementById('loading-status')!
   const bookLabel = document.getElementById('loading-book')!
 
-  // Show loading, hide picker
-  document.getElementById('book-picker')!.style.display = 'none'
+  hideAll()
   overlay.classList.add('active')
   bookLabel.textContent = book.title
   bar.style.width = '0%'
   status.textContent = 'analyzing parts of speech...'
 
-  // Async NLP — processes chapter-by-chapter, yields between each
   const tagMap = await tagBook(book.chapters, (ratio) => {
-    // NLP is ~90% of the work, map 0–1 to 5%–90%
     const pct = Math.round(5 + ratio * 85)
     bar.style.width = `${pct}%`
     const done = Math.round(ratio * book.chapters.length)
@@ -135,6 +426,11 @@ async function loadAndStart(bookIdx: number) {
   const game = new Game(canvas, bookIdx, tagMap)
   activeGame = game
 
+  // Restore saved run state if provided
+  if (save) {
+    game.restoreFromSave(save)
+  }
+
   let last = 0
   function loop(time: number) {
     const dt = Math.min((time - last) / 1000, 0.05)
@@ -148,3 +444,6 @@ async function loadAndStart(bookIdx: number) {
     requestAnimationFrame(loop)
   })
 }
+
+// ── Entry point — show main menu ───────────────────────────────
+showMainMenu()

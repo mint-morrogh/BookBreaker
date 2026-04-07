@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "@chenglou/pretext": "^0.0.4",
-    "compromise": "^14.15.0"
+    "compromise": "^14.15.0",
+    "jszip": "^3.10.1"
   },
   "devDependencies": {
     "typescript": "^5.8.0",
