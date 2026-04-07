@@ -112,6 +112,7 @@
       100% { transform: scale(1); }
     }
     .stat-value.lives { color: #f87171; }
+    .stat-value.gold { color: #fbbf24; }
     #word-log::-webkit-scrollbar { display: none; }
     #word-log {
       flex: 1;
@@ -407,6 +408,7 @@
     .mini-stat-val.lives { color: #f87171; }
     .mini-stat-val.combo { color: #f472b6; }
     .mini-stat-val.words { color: #a78bfa; }
+    .mini-stat-val.gold { color: #fbbf24; }
     #mini-stats-open {
       font-size: 20px;
       color: #e8c44a;
@@ -528,6 +530,7 @@
   <div id="app" style="display:none;">
     <div id="mini-stats">
       <div class="mini-stat">SCR<div class="mini-stat-val score" id="mini-score">0</div></div>
+      <div class="mini-stat">GLD<div class="mini-stat-val gold" id="mini-gold">0</div></div>
       <div class="mini-stat">LVS<div class="mini-stat-val lives" id="mini-lives">3</div></div>
       <div class="mini-stat">CMB<div class="mini-stat-val combo" id="mini-combo">x1</div></div>
       <div class="mini-stat">WRD<div class="mini-stat-val words" id="mini-words">0</div></div>
@@ -551,6 +554,10 @@
       <div class="stat-box">
         <div class="stat-label">Score</div>
         <div class="stat-value" id="score-display">0</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">Gold</div>
+        <div class="stat-value gold" id="gold-display">0</div>
       </div>
       <div class="stat-box">
         <div class="stat-label">Lives</div>

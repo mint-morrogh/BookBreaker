@@ -1,15 +1,57 @@
 import { prepareWithSegments, layoutWithLines } from '@chenglou/pretext'
 import { BOOKS, type Book } from './content'
 import type { WordTag } from './tagger'
-import type { Brick, Ball, Particle, Pickup, Dot, Shrapnel } from './types'
+import type { Brick, Ball, Particle, Pickup, Dot, Shrapnel, ShopItem, ShopRarity } from './types'
 import { scoreWord, getHighScores, saveHighScore } from './scoring'
 export { getTopScore } from './scoring'
-import { TAG_COLORS, wordColor, setActiveTagMap } from './colors'
+import { TAG_COLORS, wordColor, setActiveTagMap, colorTier } from './colors'
 import { sidebarEls, initLetterGrid, clearWordLog, flushWordLog } from './sidebar'
-import { renderGameOver, renderPause } from './renderer'
+import { renderGameOver, renderPause, roundRect } from './renderer'
 import { updateBalls, type PhysicsState } from './physics'
 import { activateUpgrade as runActivateUpgrade, hitBrick as runHitBrick, type UpgradeState } from './upgrades'
 import { renderGame, type RenderState } from './render-game'
+
+// ── Shop rarity system ─────────────────────────────────────────
+const RARITY_COLORS: Record<ShopRarity, string> = {
+  common: '#6b7280',     // gray
+  uncommon: '#4ade80',   // green
+  rare: '#7dd3fc',       // cyan
+  epic: '#c084fc',       // purple
+}
+const RARITY_LABELS: Record<ShopRarity, string> = {
+  common: 'COMMON', uncommon: 'UNCOMMON', rare: 'RARE', epic: 'EPIC',
+}
+// Roll rarity with weighted odds: common 45%, uncommon 30%, rare 18%, epic 7%
+function rollRarity(): ShopRarity {
+  const r = Math.random()
+  if (r < 0.45) return 'common'
+  if (r < 0.75) return 'uncommon'
+  if (r < 0.93) return 'rare'
+  return 'epic'
+}
+// Price multiplier per rarity
+const RARITY_PRICE: Record<ShopRarity, number> = {
+  common: 0.8, uncommon: 1.0, rare: 1.3, epic: 1.7,
+}
+
+// ── Shop item pool ─────────────────────────────────────────────
+// base price is scaled by rarity multiplier on generation
+interface ShopPoolEntry {
+  id: string; name: string; desc: string; basePrice: number
+  isLife?: boolean // guaranteed slot
+}
+const SHOP_POOL: ShopPoolEntry[] = [
+  { id: 'life1', name: '+1 LIFE', desc: 'Extra life', basePrice: 75, isLife: true },
+  { id: 'life3', name: '+3 LIVES', desc: 'Three extra lives', basePrice: 180, isLife: true },
+  { id: 'widen1', name: 'WIDEN', desc: 'Expand paddle', basePrice: 60 },
+  { id: 'widen2', name: 'WIDEN x2', desc: 'Double expand', basePrice: 110 },
+  { id: 'multi', name: 'MULTIBALL', desc: 'Start with 3 balls', basePrice: 70 },
+  { id: 'safety2', name: 'SAFETY +2', desc: 'Safety bar +2 hits', basePrice: 60 },
+  { id: 'safety4', name: 'SAFETY +4', desc: 'Safety bar +4 hits', basePrice: 110 },
+  { id: 'blast', name: 'BLAST', desc: 'Explosive ball charge', basePrice: 80 },
+  { id: 'pierce', name: 'PIERCE +3', desc: 'Punch through bricks', basePrice: 70 },
+  { id: 'lucky', name: 'LUCKY DROPS', desc: 'Upgrade drop chance +2%', basePrice: 65 },
+]
 
 // ── Game ────────────────────────────────────────────────────────
 // Fixed virtual resolution — all game logic runs in this coordinate space
@@ -83,6 +125,9 @@ export class Game {
   // charge mechanic
   private charge = 0              // 0-1, fills as bricks break, click to recall ball
 
+  // shop bonuses (persist across levels, reset on restart)
+  private dropBonus = 0           // flat % added to upgrade drop chance (Lucky Drops)
+
   // dot field
   private dots: Dot[] = []
   private dotSpacing = 14
@@ -95,10 +140,20 @@ export class Game {
   private lives = 3
   private alphabetCompletions = 0
   private nextLifeScore = 10000  // award +1 life every 10k points
+  private gold = 0
+
+  // shop
+  private paragraphsCompleted = 0
+  private shopItems: ShopItem[] = []
+  private shopRects: { x: number; y: number; w: number; h: number }[] = []
+  private shopContinueRect = { x: 0, y: 0, w: 0, h: 0 }
 
   // end-of-chapter sequence
   private levelWords: { word: string; color: string; points: number }[] = []
-  private levelState: 'playing' | 'endPopping' | 'endTally' | 'endGrade' = 'playing'
+  private levelState: 'playing' | 'grayCleanup' | 'endPopping' | 'endTally' | 'endGrade' | 'shop' = 'playing'
+  private grayPopBricks: Brick[] = []
+  private grayPopIdx = 0
+  private grayPopTimer = 0
   private endTimer = 0
   private endPopIdx = 0          // which brick we're popping
   private endPopBricks: Brick[] = []  // remaining alive bricks to pop
@@ -177,7 +232,7 @@ export class Game {
       this.keysDown.add(e.key)
       if (e.key === ' ' || e.key === 'Enter') {
         e.preventDefault()
-        this.launchBalls()
+        if (this.levelState === 'playing') this.launchBalls()
       }
     })
     window.addEventListener('keyup', (e) => this.keysDown.delete(e.key))
@@ -188,6 +243,11 @@ export class Game {
       if (e.button !== 0) return
       if (this.gameOver) {
         this.restart()
+      } else if (this.levelState === 'shop') {
+        const rect = this.canvas.getBoundingClientRect()
+        const vx = (e.clientX - rect.left) / rect.width * this.W
+        const vy = (e.clientY - rect.top) / rect.height * this.H
+        this.handleShopClick(vx, vy)
       } else if (this.levelState === 'endGrade' && this.endTimer > 1.0) {
         if (this.lives <= 0 || this.endGrade === 'D' || this.endGrade === 'F') {
           this.gameOver = true
@@ -195,9 +255,14 @@ export class Game {
           this.endScores = saveHighScore(this.book.title, this.score)
           this.isNewHigh = this.score > 0 && this.score >= prevTop
         } else {
-          this.levelState = 'playing'
-          this.levelWords = []
-          this.advanceLevel()
+          this.paragraphsCompleted++
+          if (this.paragraphsCompleted % 3 === 0) {
+            this.openShop()
+          } else {
+            this.levelState = 'playing'
+            this.levelWords = []
+            this.advanceLevel()
+          }
         }
       } else if (this.paused) {
         this.paused = false
@@ -242,6 +307,16 @@ export class Game {
 
       // State transitions — any touch
       if (this.gameOver) { this.restart(); return }
+      if (this.levelState === 'shop') {
+        const touch = e.changedTouches[0]
+        if (touch) {
+          const rect = this.canvas.getBoundingClientRect()
+          const vx = (touch.clientX - rect.left) / rect.width * this.W
+          const vy = (touch.clientY - rect.top) / rect.height * this.H
+          this.handleShopClick(vx, vy)
+        }
+        return
+      }
       if (this.levelState === 'endGrade' && this.endTimer > 1.0) {
         if (this.lives <= 0 || this.endGrade === 'D' || this.endGrade === 'F') {
           this.gameOver = true
@@ -249,9 +324,14 @@ export class Game {
           this.endScores = saveHighScore(this.book.title, this.score)
           this.isNewHigh = this.score > 0 && this.score >= prevTop
         } else {
-          this.levelState = 'playing'
-          this.levelWords = []
-          this.advanceLevel()
+          this.paragraphsCompleted++
+          if (this.paragraphsCompleted % 3 === 0) {
+            this.openShop()
+          } else {
+            this.levelState = 'playing'
+            this.levelWords = []
+            this.advanceLevel()
+          }
         }
         return
       }
@@ -623,6 +703,42 @@ export class Game {
 
     // ── End-of-chapter sequence (all in-field, no overlays) ──
 
+    // Phase 0: Gray cleanup — only grays left, pop them in series with base points
+    if (this.levelState === 'grayCleanup') {
+      this.grayPopTimer += dt
+      const popsPerSec = 10
+      const targetIdx = Math.floor(this.grayPopTimer * popsPerSec)
+      while (this.grayPopIdx < this.grayPopBricks.length && this.grayPopIdx < targetIdx) {
+        const brick = this.grayPopBricks[this.grayPopIdx]
+        brick.alive = false
+        // Base points only — no multiplier, no combo boost
+        this.score += brick.points
+        this.levelWords.push({ word: brick.word, color: brick.color, points: brick.points })
+        this.wordsBroken++
+        // Gray puff particles
+        const bsy = brick.y - this.bricksScrollY
+        for (let i = 0; i < brick.word.length; i++) {
+          this.particles.push({
+            x: brick.x + (i / brick.word.length) * brick.w + 8,
+            y: bsy + brick.h / 2,
+            vx: (Math.random() - 0.5) * 120,
+            vy: (Math.random() - 0.6) * 100,
+            char: brick.word[i],
+            life: 0.8, maxLife: 1.0,
+            color: '#888', size: 14,
+          })
+        }
+        this.grayPopIdx++
+      }
+      this.tickParticlesAndFade(dt)
+      // When all grays popped, brief pause for final particles then transition
+      const popDuration = this.grayPopBricks.length / popsPerSec + 0.6
+      if (this.grayPopIdx >= this.grayPopBricks.length && this.grayPopTimer > popDuration) {
+        this.startEndSequence()
+      }
+      return
+    }
+
     // Phase 1: Pop remaining bricks one by one
     if (this.levelState === 'endPopping') {
       this.endTimer += dt
@@ -705,11 +821,25 @@ export class Game {
           this.endScores = saveHighScore(this.book.title, this.score)
           this.isNewHigh = this.score > 0 && this.score >= prevTop
         } else {
-          this.levelState = 'playing'
-          this.levelWords = []
-          this.advanceLevel()
+          this.paragraphsCompleted++
+          if (this.paragraphsCompleted % 3 === 0) {
+            this.openShop()
+          } else {
+            this.levelState = 'playing'
+            this.levelWords = []
+            this.advanceLevel()
+          }
         }
       }
+      return
+    }
+
+    // Phase 4: Shop — between levels, wait for purchases / continue
+    if (this.levelState === 'shop') {
+      if (this.keysDown.has(' ') || this.keysDown.has('Enter')) {
+        this.closeShopAndAdvance()
+      }
+      this.tickParticlesAndFade(dt)
       return
     }
 
@@ -867,6 +997,19 @@ export class Game {
                   color: b.color, size: 16,
                 })
               }
+              // Gold coin for break-off bonus (stopwords give nothing)
+              const bTier = colorTier(b.color)
+              const goldAmt = bTier <= 0 ? 0 : bTier === 1 ? 1 : bTier === 2 ? 2 : bTier === 3 ? 3 : 5
+              if (goldAmt > 0) {
+                this.gold += goldAmt
+                this.particles.push({
+                  x: b.x + b.w / 2, y: bsy + b.h / 2,
+                  vx: (Math.random() - 0.5) * 40,
+                  vy: -80 - Math.random() * 30,
+                  char: `+${goldAmt} ◆`, life: 0.8, maxLife: 0.8,
+                  color: '#fbbf24', size: 11,
+                })
+              }
             }
           }
           // Popup label: "BREAK-OFF" for 1, "BREAK-OFF x3" etc. for multiples
@@ -889,6 +1032,24 @@ export class Game {
       // Level clear: all words placed and all bricks broken
       if (this.levelState === 'playing' && this.wordCursor >= this.wordsInParagraph.length && !this.bricks.some(b => b.alive)) {
         this.startEndSequence()
+      }
+
+      // Gray cleanup: all colored bricks broken, only grays remain — auto-pop them
+      if (this.levelState === 'playing' && this.wordCursor >= this.wordsInParagraph.length) {
+        const allAlive = this.bricks.filter(b => b.alive)
+        if (allAlive.length > 0 && allAlive.every(b => b.color === TAG_COLORS.stopword)) {
+          // Cancel any floating break-off islands — we're cleaning up everything
+          this.islandGroups.clear()
+          for (const b of allAlive) {
+            b.breakOff = 0
+            b.breakOffGroupId = 0
+          }
+          this.grayPopBricks = allAlive
+          this.grayPopIdx = 0
+          this.grayPopTimer = 0
+          this.levelState = 'grayCleanup'
+          for (const ball of this.balls) { ball.stuck = true; ball.trail = [] }
+        }
       }
 
       // Bricks reached the top wall → end sequence with remaining bricks
@@ -1268,6 +1429,9 @@ export class Game {
     this.safetyHits = 0
     this.freezeTimer = 0
     this.charge = 0
+    this.gold = 0
+    this.dropBonus = 0
+    this.paragraphsCompleted = 0
     this.bricksDriftSpeed = this.baseDriftSpeed
     this.paddleText = 'BOOK BREAKER'
     this.paddleY = this.paddleBaseY
@@ -1279,11 +1443,218 @@ export class Game {
     this.particles = []
     this.levelWords = []
     this.levelState = 'playing'
+    this.grayPopBricks = []
+    this.grayPopIdx = 0
+    this.grayPopTimer = 0
     this.loadParagraph(0, 0)
     this.balls = []
     this.spawnBall()
     initLetterGrid()
     clearWordLog()
+    this.updateSidebar()
+  }
+
+  // ── Shop ──────────────────────────────────────────────────────
+  private openShop() {
+    this.levelState = 'shop'
+    this.shopItems = this.generateShopItems()
+
+    // Responsive grid: 2 cols × 3 rows on mobile, 3 cols × 2 rows on desktop
+    const narrow = this.W < 700
+    const cols = narrow ? 2 : 3
+    const rows = narrow ? 3 : 2
+    const gapX = narrow ? 12 : 20
+    const gapY = narrow ? 12 : 18
+    const itemW = narrow
+      ? Math.floor((this.W - gapX * 3) / 2)     // fill width with margins
+      : 210
+    const itemH = narrow ? 105 : 120
+    const gridW = cols * itemW + (cols - 1) * gapX
+    const gridX = Math.floor((this.W - gridW) / 2)
+    // Clamp gridY so continue button (gridY + rows*(itemH+gapY) + 60) fits in H
+    const totalGridH = rows * (itemH + gapY) + 60
+    const idealGridY = narrow ? 260 : 370
+    const gridY = Math.min(idealGridY, this.H - totalGridH - 40)
+
+    this.shopRects = []
+    for (let i = 0; i < 6; i++) {
+      const col = i % cols
+      const row = Math.floor(i / cols)
+      this.shopRects.push({
+        x: gridX + col * (itemW + gapX),
+        y: gridY + row * (itemH + gapY),
+        w: itemW,
+        h: itemH,
+      })
+    }
+    const btnW = narrow ? 180 : 240
+    this.shopContinueRect = {
+      x: Math.floor(this.W / 2 - btnW / 2),
+      y: gridY + rows * (itemH + gapY) + 16,
+      w: btnW,
+      h: 44,
+    }
+  }
+
+  private generateShopItems(): ShopItem[] {
+    const lifeOpts = SHOP_POOL.filter(s => s.isLife)
+    const others = SHOP_POOL.filter(s => !s.isLife)
+    const picked: ShopItem[] = []
+
+    const toShopItem = (entry: ShopPoolEntry): ShopItem => {
+      const rarity = rollRarity()
+      return {
+        id: entry.id,
+        name: entry.name,
+        desc: entry.desc,
+        price: Math.round(entry.basePrice * RARITY_PRICE[rarity]),
+        rarity,
+        bought: false,
+      }
+    }
+
+    // 1 guaranteed life option
+    picked.push(toShopItem(lifeOpts[Math.floor(Math.random() * lifeOpts.length)]))
+    // 5 from the rest (shuffled)
+    const shuffled = others.slice().sort(() => Math.random() - 0.5)
+    for (let i = 0; i < 5 && i < shuffled.length; i++) {
+      picked.push(toShopItem(shuffled[i]))
+    }
+    return picked.sort(() => Math.random() - 0.5)
+  }
+
+  private handleShopClick(vx: number, vy: number) {
+    // Check shop items
+    for (let i = 0; i < this.shopRects.length; i++) {
+      const r = this.shopRects[i]
+      if (vx >= r.x && vx <= r.x + r.w && vy >= r.y && vy <= r.y + r.h) {
+        this.buyShopItem(i)
+        return
+      }
+    }
+    // Check continue button
+    const r = this.shopContinueRect
+    if (vx >= r.x && vx <= r.x + r.w && vy >= r.y && vy <= r.y + r.h) {
+      this.closeShopAndAdvance()
+    }
+  }
+
+  private closeShopAndAdvance() {
+    // Snapshot what was purchased before advanceLevel resets anything
+    const boughtItems = this.shopItems.filter(it => it.bought).map(it => it.id)
+    this.levelState = 'playing'
+    this.levelWords = []
+    this.advanceLevel()
+    // Reapply upgrade purchases that advanceLevel may have wiped (chapter reset)
+    for (const id of boughtItems) {
+      if (id === 'widen1') {
+        this.widenLevel = Math.max(this.widenLevel, 1)
+        const equals = '═'.repeat(this.widenLevel)
+        this.paddleText = `${equals} BOOK BREAKER ${equals}`
+        this.measurePaddle()
+      } else if (id === 'widen2') {
+        this.widenLevel = Math.max(this.widenLevel, 2)
+        const equals = '═'.repeat(this.widenLevel)
+        this.paddleText = `${equals} BOOK BREAKER ${equals}`
+        this.measurePaddle()
+      } else if (id === 'multi' && this.balls.length < 3) {
+        while (this.balls.length < 3) {
+          this.balls.push({
+            x: this.paddleX + this.paddleW / 2 + (this.balls.length % 2 === 0 ? -12 : 12),
+            y: this.paddleY + this.paddleH + 9,
+            vx: 0, vy: 0, r: 7,
+            trail: [], stuck: true,
+            backWallHits: 0, slamStacks: 0,
+            blastCharge: 0, pierceLeft: 0,
+          })
+        }
+      } else if (id === 'safety2') {
+        if (this.safetyHits < 2) {
+          const wasFresh = this.safetyHits === 0
+          this.safetyHits = Math.max(this.safetyHits, 2)
+          this.measureSafety()
+          if (wasFresh) this.safetyX = this.W / 2 - this.safetyW / 2
+        }
+      } else if (id === 'safety4') {
+        if (this.safetyHits < 4) {
+          const wasFresh = this.safetyHits === 0
+          this.safetyHits = Math.max(this.safetyHits, 4)
+          this.measureSafety()
+          if (wasFresh) this.safetyX = this.W / 2 - this.safetyW / 2
+        }
+      } else if (id === 'blast') {
+        for (const ball of this.balls) ball.blastCharge = Math.max(ball.blastCharge, 2)
+      } else if (id === 'pierce') {
+        for (const ball of this.balls) ball.pierceLeft = Math.max(ball.pierceLeft, 3)
+      }
+      // life1, life3, score: already applied and survive advanceLevel
+    }
+  }
+
+  private buyShopItem(idx: number) {
+    const item = this.shopItems[idx]
+    if (!item || item.bought || this.gold < item.price) return
+
+    item.bought = true
+    this.gold -= item.price
+
+    if (item.id === 'life1') {
+      this.lives += 1
+    } else if (item.id === 'life3') {
+      this.lives += 3
+    } else if (item.id === 'widen1') {
+      this.widenLevel += 1
+      const equals = '═'.repeat(this.widenLevel)
+      this.paddleText = `${equals} BOOK BREAKER ${equals}`
+      this.measurePaddle()
+    } else if (item.id === 'widen2') {
+      this.widenLevel += 2
+      const equals = '═'.repeat(this.widenLevel)
+      this.paddleText = `${equals} BOOK BREAKER ${equals}`
+      this.measurePaddle()
+    } else if (item.id === 'multi') {
+      for (let i = 0; i < 2; i++) {
+        this.balls.push({
+          x: this.paddleX + this.paddleW / 2 + (i === 0 ? -12 : 12),
+          y: this.paddleY + this.paddleH + 9,
+          vx: 0, vy: 0, r: 7,
+          trail: [], stuck: true,
+          backWallHits: 0, slamStacks: 0,
+          blastCharge: 0, pierceLeft: 0,
+        })
+      }
+    } else if (item.id === 'safety2') {
+      const wasFresh = this.safetyHits === 0
+      this.safetyHits = Math.min(9, this.safetyHits + 2)
+      this.measureSafety()
+      if (wasFresh) this.safetyX = this.W / 2 - this.safetyW / 2
+    } else if (item.id === 'safety4') {
+      const wasFresh = this.safetyHits === 0
+      this.safetyHits = Math.min(9, this.safetyHits + 4)
+      this.measureSafety()
+      if (wasFresh) this.safetyX = this.W / 2 - this.safetyW / 2
+    } else if (item.id === 'blast') {
+      for (const ball of this.balls) {
+        ball.blastCharge = Math.max(ball.blastCharge, 2)
+      }
+    } else if (item.id === 'pierce') {
+      for (const ball of this.balls) {
+        ball.pierceLeft = Math.max(ball.pierceLeft, 3)
+      }
+    } else if (item.id === 'lucky') {
+      this.dropBonus += 0.02  // +2% flat, stacks permanently
+    }
+
+    // Purchase feedback particle
+    const rect = this.shopRects[idx]
+    if (rect) {
+      this.particles.push({
+        x: rect.x + rect.w / 2, y: rect.y + rect.h / 2,
+        vx: 0, vy: -40,
+        char: '✓', life: 0.8, maxLife: 0.8,
+        color: '#4ade80', size: 24,
+      })
+    }
     this.updateSidebar()
   }
 
@@ -1390,6 +1761,8 @@ export class Game {
       brickPadX: this.brickPadX,
       brickFontSize: this.brickFontSize,
       levelWords: this.levelWords,
+      gold: this.gold,
+      dropBonus: this.dropBonus,
     }
   }
 
@@ -1402,6 +1775,8 @@ export class Game {
     this.wordsBroken = uState.wordsBroken
     this.alphabetCompletions = uState.alphabetCompletions
     this.lives = uState.lives
+    this.gold = uState.gold
+    this.dropBonus = uState.dropBonus
   }
 
   private updateSidebar() {
@@ -1417,6 +1792,7 @@ export class Game {
     const wordsStr = String(this.wordsBroken)
 
     sidebarEls.score.textContent = scoreStr
+    sidebarEls.gold.textContent = String(this.gold)
     sidebarEls.lives.textContent = livesStr
     sidebarEls.combo.textContent = comboStr
     sidebarEls.words.textContent = wordsStr
@@ -1437,6 +1813,7 @@ export class Game {
       document.getElementById('mini-lives')!.textContent = livesStr
       document.getElementById('mini-combo')!.textContent = comboStr
       document.getElementById('mini-words')!.textContent = abbrev(this.wordsBroken)
+      document.getElementById('mini-gold')!.textContent = String(this.gold)
     }
 
     // Recall button visibility
@@ -1484,10 +1861,20 @@ export class Game {
       hasRecalled: this.hasRecalled,
       isMobile: this.isMobile,
       levelState: this.levelState,
+      gold: this.gold,
+      ballSpeed: this.ballSpeed,
     }
     renderGame(ctx, W, H, renderState)
 
     // End-of-chapter in-field UI
+    if (this.levelState === 'grayCleanup') {
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillStyle = '#aaa'
+      ctx.font = `bold 16px 'JetBrains Mono', monospace`
+      ctx.fillText('CLEARING...', W / 2, H / 2)
+    }
+
     if (this.levelState === 'endPopping') {
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
@@ -1598,15 +1985,184 @@ export class Game {
       // Prompt
       if (this.endTimer > 1.0) {
         const isFail = isDead || this.endGrade === 'D' || this.endGrade === 'F'
+        const isShopNext = !isFail && (this.paragraphsCompleted + 1) % 3 === 0
+        const action = this.isMobile ? 'TAP' : 'CLICK or SPACE'
+        let prompt: string
+        if (isDead) prompt = `[ ${action} to continue ]`
+        else if (isFail) prompt = `[ ${action} to restart ]`
+        else if (isShopNext) prompt = `[ ${action} to enter the shop ]`
+        else prompt = `[ ${action} to continue ]`
         ctx.fillStyle = isFail ? '#f87171' : '#7dd3fc'
         ctx.font = `bold 14px 'JetBrains Mono', monospace`
-        ctx.fillText(
-          isDead ? '[ CLICK or SPACE to continue ]' :
-          isFail ? '[ CLICK or SPACE to restart ]' :
-          '[ CLICK or SPACE to continue ]',
-          W / 2, H * 0.68,
-        )
+        ctx.fillText(prompt, W / 2, H * 0.68)
       }
+    }
+
+    // Shop overlay
+    if (this.levelState === 'shop' && this.shopRects.length > 0) {
+      const blur = this.isMobile ? 0.35 : 1
+      const narrow = this.W < 700
+
+      // Dark backdrop
+      ctx.fillStyle = 'rgba(6, 8, 12, 0.92)'
+      ctx.fillRect(0, 0, W, H)
+
+      // ── Bordered panel around entire shop ──
+      const firstR = this.shopRects[0]
+      const lastR = this.shopRects[this.shopRects.length - 1]
+      const panelPad = narrow ? 16 : 24
+      const panelX = firstR.x - panelPad
+      const panelY = firstR.y - (narrow ? 100 : 120)
+      const panelRight = lastR.x + lastR.w + panelPad
+      const panelBottom = this.shopContinueRect.y + this.shopContinueRect.h + panelPad
+      const panelW = panelRight - panelX
+      const panelH = panelBottom - panelY
+
+      ctx.fillStyle = '#0a0e14'
+      ctx.strokeStyle = '#1a2030'
+      ctx.lineWidth = 2
+      roundRect(ctx, panelX, panelY, panelW, panelH, 8)
+      ctx.fill()
+      ctx.stroke()
+
+      // Gold accent line at top of panel
+      ctx.strokeStyle = '#e8c44a'
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.moveTo(panelX + 8, panelY)
+      ctx.lineTo(panelRight - 8, panelY)
+      ctx.stroke()
+
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+
+      // ── Title ──
+      const titleY = firstR.y - (narrow ? 78 : 96)
+      ctx.fillStyle = '#e8c44a'
+      ctx.shadowColor = '#e8c44a'
+      ctx.shadowBlur = 18 * blur
+      ctx.font = `bold ${narrow ? 22 : 28}px 'JetBrains Mono', monospace`
+      ctx.fillText('◆  SHOP  ◆', W / 2, titleY)
+      ctx.shadowBlur = 0
+
+      // ── Gold display ──
+      const goldY = firstR.y - (narrow ? 48 : 58)
+      ctx.fillStyle = '#fbbf24'
+      ctx.shadowColor = '#fbbf24'
+      ctx.shadowBlur = 6 * blur
+      ctx.font = `bold ${narrow ? 16 : 20}px 'JetBrains Mono', monospace`
+      ctx.fillText(`◆ ${this.gold}`, W / 2, goldY)
+      ctx.shadowBlur = 0
+
+      // ── Hint ──
+      const hintY = firstR.y - (narrow ? 22 : 28)
+      ctx.fillStyle = '#374151'
+      ctx.font = `${narrow ? 9 : 11}px 'JetBrains Mono', monospace`
+      ctx.fillText(narrow ? 'tap to buy · tap CONTINUE to skip' : 'click to purchase  ·  SPACE to continue', W / 2, hintY)
+
+      // ── Item cards (text-only, rarity-colored) ──
+      for (let i = 0; i < this.shopItems.length && i < this.shopRects.length; i++) {
+        const item = this.shopItems[i]
+        const r = this.shopRects[i]
+        const canAfford = this.gold >= item.price
+        const dimmed = item.bought || !canAfford
+        const rarityColor = RARITY_COLORS[item.rarity]
+
+        // Card background
+        ctx.fillStyle = item.bought ? '#080a10' : '#0c1018'
+        roundRect(ctx, r.x, r.y, r.w, r.h, 5)
+        ctx.fill()
+
+        // Border — color from rarity, glow when affordable
+        if (!item.bought && canAfford) {
+          ctx.shadowColor = rarityColor
+          ctx.shadowBlur = 8 * blur
+        }
+        ctx.strokeStyle = item.bought ? '#1a2030' : (canAfford ? rarityColor : '#1f1215')
+        ctx.lineWidth = item.bought ? 1 : 1.5
+        roundRect(ctx, r.x, r.y, r.w, r.h, 5)
+        ctx.stroke()
+        ctx.shadowBlur = 0
+
+        ctx.globalAlpha = dimmed ? 0.25 : 1.0
+
+        // Rarity label (top of card)
+        ctx.fillStyle = rarityColor
+        ctx.font = `bold ${narrow ? 8 : 9}px 'JetBrains Mono', monospace`
+        ctx.fillText(RARITY_LABELS[item.rarity], r.x + r.w / 2, r.y + r.h * 0.14)
+
+        // Thin rarity accent line under label
+        ctx.strokeStyle = rarityColor
+        ctx.globalAlpha = dimmed ? 0.1 : 0.35
+        ctx.lineWidth = 1
+        ctx.beginPath()
+        const lineInset = narrow ? 16 : 24
+        ctx.moveTo(r.x + lineInset, r.y + r.h * 0.22)
+        ctx.lineTo(r.x + r.w - lineInset, r.y + r.h * 0.22)
+        ctx.stroke()
+        ctx.globalAlpha = dimmed ? 0.25 : 1.0
+
+        // Name (main text, prominent)
+        ctx.fillStyle = '#e0e4ea'
+        ctx.font = `bold ${narrow ? 12 : 14}px 'JetBrains Mono', monospace`
+        ctx.fillText(item.name, r.x + r.w / 2, r.y + r.h * 0.42)
+
+        // Description
+        ctx.fillStyle = '#5a6578'
+        ctx.font = `${narrow ? 8 : 10}px 'JetBrains Mono', monospace`
+        ctx.fillText(item.desc, r.x + r.w / 2, r.y + r.h * 0.60)
+
+        // Price or SOLD
+        if (item.bought) {
+          ctx.fillStyle = '#374151'
+          ctx.font = `bold ${narrow ? 10 : 11}px 'JetBrains Mono', monospace`
+          ctx.fillText('── SOLD ──', r.x + r.w / 2, r.y + r.h * 0.82)
+        } else {
+          ctx.fillStyle = canAfford ? '#fbbf24' : '#f87171'
+          ctx.font = `bold ${narrow ? 12 : 14}px 'JetBrains Mono', monospace`
+          ctx.fillText(`◆ ${item.price}`, r.x + r.w / 2, r.y + r.h * 0.82)
+        }
+
+        ctx.globalAlpha = 1.0
+      }
+
+      // ── Divider before continue ──
+      const divY = this.shopContinueRect.y - 10
+      ctx.strokeStyle = '#1a2030'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.moveTo(firstR.x, divY)
+      ctx.lineTo(lastR.x + lastR.w, divY)
+      ctx.stroke()
+
+      // ── Continue button ──
+      const cr = this.shopContinueRect
+      ctx.fillStyle = '#0c1018'
+      ctx.strokeStyle = '#5a6578'
+      ctx.lineWidth = 1.5
+      roundRect(ctx, cr.x, cr.y, cr.w, cr.h, 5)
+      ctx.fill()
+      ctx.stroke()
+
+      ctx.fillStyle = '#7dd3fc'
+      ctx.shadowColor = '#7dd3fc'
+      ctx.shadowBlur = 6 * blur
+      ctx.font = `bold ${narrow ? 13 : 16}px 'JetBrains Mono', monospace`
+      ctx.fillText('CONTINUE  ▶', W / 2, cr.y + cr.h / 2)
+      ctx.shadowBlur = 0
+
+      // ── Particles (purchase feedback) on top ──
+      for (const p of this.particles) {
+        const lifeRatio = p.life / p.maxLife
+        ctx.globalAlpha = lifeRatio
+        ctx.fillStyle = p.color
+        const fontSize = Math.round(p.size * (0.5 + lifeRatio * 0.5))
+        ctx.font = `bold ${fontSize}px 'JetBrains Mono', monospace`
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(p.char, p.x, p.y)
+      }
+      ctx.globalAlpha = 1.0
     }
 
     // Game over overlay

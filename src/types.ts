@@ -68,3 +68,14 @@ export interface Dot {
   vx: number
   vy: number
 }
+
+export type ShopRarity = 'common' | 'uncommon' | 'rare' | 'epic'
+
+export interface ShopItem {
+  id: string
+  name: string
+  desc: string
+  price: number
+  rarity: ShopRarity
+  bought: boolean
+}

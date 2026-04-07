@@ -57,15 +57,19 @@ export const DOT_COLORS = [
   '#2a2e35', '#2b2f36', '#2c3037', '#2d3138', '#2e3239', '#2f333a',
 ]
 
-// Ball color ramps based on backWallHits
+// Ball color ramps based on backWallHits (11 steps, 0-10)
+// Gradual yellow → orange by midpoint → deep red at max
 export const BALL_COLORS = [
-  '#e8c44a', '#e8a33a', '#e88030', '#e86028',
-  '#f85030', '#f83828', '#f82020', '#ff3050',
-  '#ff5070', '#ff80a0', '#ffb0c0',
+  '#e8c44a',  // 0  gold yellow
+  '#e8b442',  // 1  warm yellow
+  '#e8a038',  // 2  yellow-orange
+  '#e88c30',  // 3  light orange
+  '#e87828',  // 4  orange
+  '#e86020',  // 5  deep orange (midpoint)
+  '#e84c1c',  // 6  orange-red
+  '#e03818',  // 7  red-orange
+  '#d82816',  // 8  medium red
+  '#d01c14',  // 9  deep red
+  '#c81010',  // 10 max red
 ]
 
-export const TRAIL_COLORS = [
-  '#7dd3fc', '#8dc0f0', '#a0a8e0', '#b890d0',
-  '#d080b0', '#e07090', '#f06070', '#ff5060',
-  '#ff7080', '#ffa0a0', '#ffc8c8',
-]

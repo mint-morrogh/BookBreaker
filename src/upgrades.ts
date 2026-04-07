@@ -28,6 +28,8 @@ export interface UpgradeState {
   brickPadX: number
   brickFontSize: number
   levelWords: { word: string; color: string; points: number }[]
+  gold: number
+  dropBonus: number   // flat % added to all upgrade drop chances (from shop)
 }
 
 // ── Events returned so game.ts can apply mutations ─────────────
@@ -81,8 +83,8 @@ export function activateUpgrade(pickup: Pickup, state: UpgradeState): UpgradeEve
             trail: [],
             stuck: false,
 
-            backWallHits: 0,
-            slamStacks: 0,
+            backWallHits: source.backWallHits,
+            slamStacks: source.slamStacks,
             blastCharge: 0,
             pierceLeft: 0,
           })
@@ -161,6 +163,23 @@ export function hitBrick(brick: Brick, ball: Ball, state: UpgradeState): void {
     })
   }
 
+  // Gold coin — tier-based reward (stopwords give nothing)
+  const coinTier = colorTier(brick.color)
+  const goldAmt = coinTier <= 0 ? 0 : coinTier === 1 ? 1 : coinTier === 2 ? 2 : coinTier === 3 ? 3 : 5
+  if (goldAmt > 0) {
+    state.gold += goldAmt
+    const bsy = brick.y - state.bricksScrollY
+    state.particles.push({
+      x: brick.x + brick.w / 2 + (Math.random() - 0.5) * 20,
+      y: bsy + brick.h / 2,
+      vx: (Math.random() - 0.5) * 40,
+      vy: -80 - Math.random() * 30,
+      char: `+${goldAmt} ◆`,
+      life: 0.8, maxLife: 0.8,
+      color: '#fbbf24', size: 11,
+    })
+  }
+
   // Blast: spawn shrapnel projectiles that fly out and break bricks on contact
   if (ball.blastCharge > 0) {
     const bx = brick.x + brick.w / 2
@@ -186,9 +205,9 @@ export function hitBrick(brick: Brick, ball: Ball, state: UpgradeState): void {
     }
   }
 
-  // Roll for upgrade drop
+  // Roll for upgrade drop (dropBonus is flat % added from shop Lucky Drops)
   const tier = colorTier(brick.color)
-  if (tier > 0 && Math.random() < dropChance(tier)) {
+  if (tier > 0 && Math.random() < dropChance(tier) + state.dropBonus) {
     const brickScreenY = brick.y - state.bricksScrollY
     const roll = Math.random()
     let type: UpgradeType

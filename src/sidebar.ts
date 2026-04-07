@@ -10,6 +10,7 @@ export const sidebarEls = {
   progressText: document.getElementById('progress-text')!,
   letterGrid: document.getElementById('letter-grid')!,
   wordLog: document.getElementById('word-log')!,
+  gold: document.getElementById('gold-display')!,
 }
 
 export function initLetterGrid() {

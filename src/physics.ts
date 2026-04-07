@@ -51,13 +51,12 @@ export function updateBalls(
       continue
     }
 
-    // Trail — record by distance so it stays tight at any speed
-    const lastT = ball.trail.length > 0 ? ball.trail[ball.trail.length - 1] : null
-    if (!lastT || (ball.x - lastT.x) ** 2 + (ball.y - lastT.y) ** 2 > 36) {
-      ball.trail.push({ x: ball.x, y: ball.y, age: 0 })
-    }
-    if (ball.trail.length > 16) ball.trail.shift()
+    // Trail — adaptive density: record every frame, cap by time (not count)
+    // This keeps the trail smooth at any speed without gaps
+    ball.trail.push({ x: ball.x, y: ball.y, age: 0 })
     for (const t of ball.trail) t.age += dt
+    // Trim points older than 0.15s — trail length is speed-proportional
+    while (ball.trail.length > 0 && ball.trail[0].age > 0.15) ball.trail.shift()
 
     ball.x += ball.vx * dt
     ball.y += ball.vy * dt
