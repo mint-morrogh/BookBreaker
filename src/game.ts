@@ -219,8 +219,8 @@ export class Game {
     this.canvas.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return
       if (this.gameOver) {
-        if (this.onGameEnd) { this.onGameEnd(); return }
-        this.restart()
+        if (this.onGameEnd) this.onGameEnd()
+        return
       } else if (this.paused) {
         this.paused = false
       } else if (this.levelState === 'shop') {
@@ -271,11 +271,10 @@ export class Game {
 
       // State transitions — any touch
       if (this.gameOver) {
-        if (this.onGameEnd) { this.onGameEnd(); return }
-        this.restart()
+        if (this.onGameEnd) this.onGameEnd()
         return
       }
-      if (this.paused) { this.paused = false; return }
+      if (this.paused) { this.paused = false }  // don't return — let touch register as move finger
       if (this.levelState === 'shop') {
         const touch = e.changedTouches[0]
         if (touch) {
@@ -709,6 +708,7 @@ export class Game {
       magnetOffsetX: 0,
       homingLeft: 0,
       homingCooldown: 0,
+      ghostLeft: 0, ghostPhasedBricks: new Set(),
     })
   }
 
@@ -926,8 +926,7 @@ export class Game {
     if (this.paused) return
     if (this.gameOver) {
       if (this.keysDown.has(' ') || this.keysDown.has('Enter')) {
-        if (this.onGameEnd) { this.onGameEnd(); return }
-        this.restart()
+        if (this.onGameEnd) this.onGameEnd()
       }
       return
     }
@@ -1403,7 +1402,7 @@ export class Game {
               vx: 0, vy: 0, r: this.ballR,
               trail: [], stuck: true,
               backWallHits: 0, slamStacks: 0,
-              blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0,
+              blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0, ghostLeft: 0, ghostPhasedBricks: new Set(),
             }]
           }
         }
@@ -1461,7 +1460,7 @@ export class Game {
             x: s.x, y: s.y, vx: 0, vy: 0, r: 3,
             trail: [], stuck: false,
             backWallHits: 0, slamStacks: 0,
-            blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0,
+            blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0, ghostLeft: 0, ghostPhasedBricks: new Set(),
           }
           this.hitBrick(brick, dummyBall)
           // Spark on impact
@@ -1691,7 +1690,7 @@ export class Game {
   // ── Shop ──────────────────────────────────────────────────────
   private openShop() {
     this.levelState = 'shop'
-    this.shopItems = generateShopItems(this.shopMaxedState())
+    this.shopItems = generateShopItems(this.shopMaxedState(), this.book.difficulty)
 
     // Responsive grid: 2 cols × 3 rows on mobile, 3 cols × 2 rows on desktop
     const narrow = this.W < 700
@@ -1792,7 +1791,7 @@ export class Game {
           vx: 0, vy: 0, r: this.ballR,
           trail: [], stuck: true,
           backWallHits: 0, slamStacks: 0,
-          blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0,
+          blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0, ghostLeft: 0, ghostPhasedBricks: new Set(),
         })
       }
     } else if (id === 'safety') {
@@ -1814,6 +1813,9 @@ export class Game {
     } else if (id === 'homing') {
       for (const ball of this.balls) ball.homingLeft += HOMING_AMOUNTS[tier]
       console.log(`[HOMING] shop applied: +${HOMING_AMOUNTS[tier]} shots, balls now:`, this.balls.map(b => b.homingLeft))
+    } else if (id === 'ghost') {
+      const GHOST_AMOUNTS = [0, 2, 3, 4, 5]
+      for (const ball of this.balls) ball.ghostLeft += GHOST_AMOUNTS[tier]
     }
   }
 
@@ -1884,7 +1886,7 @@ export class Game {
         vx: 0, vy: 0, r: this.ballR,
         trail: [], stuck: true,
         backWallHits: 0, slamStacks: 0,
-        blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0,
+        blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0, ghostLeft: 0, ghostPhasedBricks: new Set(),
       }]
     } else {
       // Same chapter — carry over charge, multiball, pierce, blast, widen, safety
@@ -2070,6 +2072,7 @@ export class Game {
       ballSpeed: this.ballSpeed,
       magnetCharges: this.magnetCharges,
       backWallReveal: this.backWallReveal,
+      tutorialPhase: this.tutorial ? this.tutorial.phase : -1,
     }
     renderGame(ctx, W, H, renderState)
 
@@ -2370,6 +2373,17 @@ export class Game {
       this.levelLivesLost = save.levelLivesLost ?? 0
       this.brickHitThisLevel = save.brickHitThisLevel ?? false
       this.islandGroups.clear()
+
+      // Reset paddle slam state — stale mid-slam state breaks slam detection
+      this.paddleY = this.paddleBaseY
+      this.paddleTargetY = this.paddleBaseY
+      this.prevPaddleY = this.paddleBaseY
+      this.paddleVy = 0
+      this.paddleVyInternal = 0
+      this.slamActive = false
+      this.mouseDown = false
+      this.slamWallTimer = 0
+      this.slamCooldown = 0
 
       if (save.levelState === 'shop') {
         this.openShop()

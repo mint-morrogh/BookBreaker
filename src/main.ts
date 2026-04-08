@@ -50,6 +50,7 @@ const bookPicker = document.getElementById('book-picker')!
 const importOverlay = document.getElementById('import-overlay')!
 
 function hideAll() {
+  stopMenuAnim()
   mainMenu.style.display = 'none'
   confirmForfeit.style.display = 'none'
   bookPicker.style.display = 'none'
@@ -57,19 +58,219 @@ function hideAll() {
   document.getElementById('app')!.style.display = 'none'
 }
 
+// ── Main menu background animation ────────────────────────────
+// All logic uses LOGICAL coordinates (not DPR-scaled). The canvas transform handles scaling.
+let menuAnimId = 0
+let menuCleanups: (() => void)[] = []
+
+function startMenuAnim() {
+  stopMenuAnim()  // clean up any previous instance
+
+  const canvas = document.getElementById('menu-bg-canvas') as HTMLCanvasElement
+  if (!canvas) return
+  const ctx = canvas.getContext('2d')!
+
+  // Logical constants (independent of DPR / screen size)
+  const BALL_R = 10
+  const FONT_SIZE = 28
+  const PADDLE_H = FONT_SIZE + 20  // 10px padding top + bottom
+  const PADDLE_PAD = 20  // text padding left + right
+  const SPEED = 280
+  const PADDLE_Y_OFFSET = 50  // px from top of screen
+
+  // State
+  let W = 0, H = 0
+  let paddleX = 0, paddleW = 200
+  let bx = 0, by = 0, bvx = 0, bvy = 0
+  let needsInit = true
+  let paused = false
+  const trail: { x: number; y: number; age: number }[] = []
+
+  function syncSize() {
+    const dpr = window.devicePixelRatio || 1
+    const cw = canvas.clientWidth
+    const ch = canvas.clientHeight
+    if (cw < 10 || ch < 10) return false
+    canvas.width = Math.round(cw * dpr)
+    canvas.height = Math.round(ch * dpr)
+    W = cw
+    H = ch
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    return true
+  }
+
+  function fullReset() {
+    needsInit = true
+    trail.length = 0
+    last = 0
+    syncSize()
+  }
+
+  // Listen for resize and visibility changes
+  const onResize = () => { syncSize(); needsInit = true; trail.length = 0; last = 0 }
+  const onVisChange = () => {
+    if (document.hidden) {
+      paused = true
+    } else {
+      // Returning from background — full re-init to avoid stale state
+      paused = false
+      fullReset()
+      if (!menuAnimId) menuAnimId = requestAnimationFrame(loop)
+    }
+  }
+  window.addEventListener('resize', onResize)
+  document.addEventListener('visibilitychange', onVisChange)
+  menuCleanups.push(
+    () => window.removeEventListener('resize', onResize),
+    () => document.removeEventListener('visibilitychange', onVisChange),
+  )
+
+  syncSize()
+
+  function initBall() {
+    syncSize()
+    if (W < 10 || H < 10) return
+    // Measure paddle width from text
+    ctx.font = `bold ${FONT_SIZE}px 'JetBrains Mono', 'Courier New', monospace`
+    paddleW = ctx.measureText('BOOK BREAKER').width + PADDLE_PAD * 2
+    paddleX = W / 2
+    bx = W / 2
+    by = PADDLE_Y_OFFSET + PADDLE_H + BALL_R + 4
+    // Harsh angle — mostly sideways
+    const side = Math.random() > 0.5 ? 1 : -1
+    const a = Math.PI / 2 + side * (0.6 + Math.random() * 0.5)
+    bvx = Math.cos(a) * SPEED
+    bvy = Math.sin(a) * SPEED
+    trail.length = 0
+    needsInit = false
+  }
+
+  let last = 0
+  function loop(time: number) {
+    if (paused) { menuAnimId = 0; return }
+    if (last === 0) { last = time; menuAnimId = requestAnimationFrame(loop); return }
+    const dt = Math.min((time - last) / 1000, 0.033)
+    last = time
+
+    // Re-check size each frame in case layout changed
+    if (W < 10 || H < 10) { syncSize(); menuAnimId = requestAnimationFrame(loop); return }
+    if (needsInit) initBall()
+    if (needsInit) { menuAnimId = requestAnimationFrame(loop); return }  // still no layout
+
+    const paddleY = PADDLE_Y_OFFSET
+
+    // Move ball
+    bx += bvx * dt
+    by += bvy * dt
+
+    // Wall bounces
+    if (bx - BALL_R < 0) { bx = BALL_R; bvx = Math.abs(bvx) }
+    if (bx + BALL_R > W) { bx = W - BALL_R; bvx = -Math.abs(bvx) }
+    if (by + BALL_R > H) { by = H - BALL_R; bvy = -Math.abs(bvy) }
+
+    // Paddle collision
+    const px = paddleX - paddleW / 2
+    if (bvy < 0 && by - BALL_R <= paddleY + PADDLE_H && by + BALL_R >= paddleY &&
+        bx >= px && bx <= px + paddleW) {
+      by = paddleY + PADDLE_H + BALL_R
+      const hitPos = (bx - px) / paddleW
+      const a = Math.PI * 0.15 + hitPos * Math.PI * 0.7
+      const s = Math.sqrt(bvx * bvx + bvy * bvy)
+      bvx = Math.cos(a) * s
+      bvy = Math.sin(a) * s
+    }
+
+    // Ball lost off top — relaunch
+    if (by - BALL_R < 0) {
+      bx = paddleX
+      by = paddleY + PADDLE_H + BALL_R + 4
+      const side = Math.random() > 0.5 ? 1 : -1
+      const a = Math.PI / 2 + side * (0.6 + Math.random() * 0.5)
+      bvx = Math.cos(a) * SPEED
+      bvy = Math.sin(a) * SPEED
+    }
+
+    // Paddle auto-tracks ball
+    paddleX += (bx - paddleX) * Math.min(1, dt * 6)
+    paddleX = Math.max(paddleW / 2, Math.min(W - paddleW / 2, paddleX))
+
+    // Trail
+    trail.push({ x: bx, y: by, age: 0 })
+    for (const t of trail) t.age += dt
+    while (trail.length > 0 && trail[0].age > 0.25) trail.shift()
+
+    // ── Draw ──
+    ctx.clearRect(0, 0, W, H)
+
+    // Trail
+    if (trail.length >= 2) {
+      ctx.strokeStyle = '#e8c44a'
+      ctx.lineCap = 'round'
+      for (let i = 0; i < trail.length - 1; i++) {
+        const t = trail[i]
+        ctx.globalAlpha = (1 - t.age / 0.25) * 0.25
+        ctx.lineWidth = BALL_R * 1.2 * (1 - t.age / 0.25)
+        ctx.beginPath()
+        ctx.moveTo(t.x, t.y)
+        ctx.lineTo(trail[i + 1].x, trail[i + 1].y)
+        ctx.stroke()
+      }
+    }
+
+    // Ball
+    ctx.globalAlpha = 0.7
+    ctx.fillStyle = '#e8c44a'
+    ctx.shadowColor = '#e8c44a'
+    ctx.shadowBlur = 12
+    ctx.beginPath()
+    ctx.arc(bx, by, BALL_R, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.shadowBlur = 0
+
+    // Paddle — full vibrant, matches in-game exactly
+    ctx.globalAlpha = 1
+    ctx.shadowColor = '#e8c44a'
+    ctx.shadowBlur = 20
+    ctx.fillStyle = '#1a1810'
+    ctx.strokeStyle = '#e8c44a'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.roundRect(paddleX - paddleW / 2, paddleY, paddleW, PADDLE_H, 3)
+    ctx.fill()
+    ctx.stroke()
+    ctx.shadowBlur = 0
+
+    // Paddle text
+    ctx.fillStyle = '#e8c44a'
+    ctx.font = `bold ${FONT_SIZE}px 'JetBrains Mono', 'Courier New', monospace`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('BOOK BREAKER', paddleX, paddleY + PADDLE_H / 2)
+
+    ctx.globalAlpha = 1
+    menuAnimId = requestAnimationFrame(loop)
+  }
+
+  menuAnimId = requestAnimationFrame(loop)
+}
+
+function stopMenuAnim() {
+  if (menuAnimId) { cancelAnimationFrame(menuAnimId); menuAnimId = 0 }
+  for (const fn of menuCleanups) fn()
+  menuCleanups = []
+}
+
 // ── Main menu ──────────────────────────────────────────────────
 function showMainMenu() {
   hideAll()
   const save = Game.loadFromStorage()
   const menuBtns = document.getElementById('menu-buttons')!
-  const subtitle = document.getElementById('menu-subtitle')!
   menuBtns.innerHTML = ''
 
   if (save) {
     const book = BOOKS[save.bookIdx]
     const chapter = book?.chapters[save.chapterIdx]
     const chLabel = chapter ? `Ch ${save.chapterIdx + 1}, P${save.paragraphIdx + 1}` : ''
-    subtitle.textContent = ''
 
     const info = document.createElement('div')
     info.className = 'menu-save-info'
@@ -94,7 +295,6 @@ function showMainMenu() {
     importBtn.addEventListener('click', showImportOverlay)
     menuBtns.appendChild(importBtn)
   } else {
-    subtitle.textContent = ''
     const newBtn = document.createElement('button')
     newBtn.className = 'menu-btn'
     newBtn.textContent = 'NEW RUN'
@@ -109,6 +309,7 @@ function showMainMenu() {
   }
 
   mainMenu.style.display = 'flex'
+  startMenuAnim()
 }
 
 // ── Forfeit confirmation ───────────────────────────────────────
@@ -479,14 +680,12 @@ async function loadAndStart(bookIdx: number, save?: ReturnType<Game['getSaveStat
   const game = new Game(canvas, bookIdx, tagMap, tutorial)
   activeGame = game
 
-  // Tutorial: return to book picker when game ends
-  if (tutorial) {
-    game.onGameEnd = () => {
-      running = false
-      activeGame = null
-      hideAll()
-      showBookPicker()
-    }
+  // Return to menu when game ends (game over or tutorial complete)
+  game.onGameEnd = () => {
+    running = false
+    activeGame = null
+    hideAll()
+    showMainMenu()
   }
 
   // Restore saved run state if provided

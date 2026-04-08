@@ -34,6 +34,8 @@ export interface Ball {
   magnetOffsetX: number  // x offset from paddle center when caught by magnet (0 = centered/normal)
   homingLeft: number    // remaining homing shots (0 = normal, >0 = arc toward highest-value brick)
   homingCooldown: number // seconds of free movement after a homing hit before re-engaging
+  ghostLeft: number     // remaining ghost phases (0 = normal, >0 = phase through bricks without bouncing)
+  ghostPhasedBricks: Set<Brick>  // bricks already phased through (each brick only costs 1 charge)
 }
 
 export interface Particle {
@@ -45,7 +47,7 @@ export interface Particle {
   size: number
 }
 
-export type UpgradeType = 'widen' | 'multiball' | 'safety' | 'blast' | 'freeze' | 'piercing' | 'bigball' | 'magnet' | 'homing'
+export type UpgradeType = 'widen' | 'multiball' | 'safety' | 'blast' | 'freeze' | 'piercing' | 'bigball' | 'magnet' | 'homing' | 'ghost'
 
 export interface Pickup {
   label: string

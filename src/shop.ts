@@ -65,6 +65,9 @@ export const SHOP_POOL: ShopPoolEntry[] = [
   { id: 'homing', basePrice: 90,
     tierNames: ['HOMING x4', 'HOMING x6', 'HOMING x8', 'HOMING x12'],
     tierDescs: ['4 guided shots', '6 guided shots', '8 guided shots', '12 guided shots'] },
+  { id: 'ghost', basePrice: 100,
+    tierNames: ['GHOST x2', 'GHOST x3', 'GHOST x4', 'GHOST x5'],
+    tierDescs: ['Phase through 2 bricks', 'Phase through 3 bricks', 'Phase through 4 bricks', 'Phase through 5 bricks'] },
 ]
 
 const RARITY_TIER: Record<ShopRarity, number> = { common: 1, uncommon: 2, rare: 3, epic: 4 }
@@ -85,7 +88,13 @@ export function isShopItemMaxed(id: string, state: ShopMaxedState): boolean {
   return false
 }
 
-export function generateShopItems(state: ShopMaxedState): ShopItem[] {
+// Difficulty price multiplier — harder books earn more gold, so upgrades cost more
+const DIFFICULTY_PRICE: Record<string, number> = {
+  'Tutorial': 1.0, 'Easy': 1.0, 'Medium': 1.4, 'Hard': 1.9, 'Very Hard': 2.5, 'Custom': 1.2,
+}
+
+export function generateShopItems(state: ShopMaxedState, difficulty?: string): ShopItem[] {
+  const diffMult = DIFFICULTY_PRICE[difficulty ?? 'Easy'] ?? 1.0
   const lifeOpts = SHOP_POOL.filter(s => s.isLife)
   const others = SHOP_POOL.filter(s => !s.isLife && !isShopItemMaxed(s.id, state))
   const picked: ShopItem[] = []
@@ -98,7 +107,7 @@ export function generateShopItems(state: ShopMaxedState): ShopItem[] {
       id: entry.id,
       name: entry.tierNames[ti],
       desc: entry.tierDescs[ti],
-      price: Math.round(entry.basePrice * RARITY_PRICE[rarity]),
+      price: Math.round(entry.basePrice * RARITY_PRICE[rarity] * diffMult),
       rarity,
       tier,
       bought: maxed,

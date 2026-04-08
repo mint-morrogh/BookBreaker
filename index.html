@@ -155,6 +155,18 @@
       z-index: 100;
       gap: 16px;
     }
+    #menu-bg-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 0;
+      pointer-events: none;
+    }
+    #main-menu > *:not(#menu-bg-canvas) {
+      position: relative;
+      z-index: 1;
+    }
     .menu-btn {
       display: block;
       width: 280px;
@@ -165,7 +177,7 @@
       letter-spacing: 2px;
       border: 1px solid #e8c44a;
       color: #e8c44a;
-      background: transparent;
+      background: #06080c;
       cursor: pointer;
       transition: background 0.15s, color 0.15s;
       -webkit-tap-highlight-color: transparent;
@@ -211,6 +223,9 @@
       color: #6b7280;
       margin-bottom: 12px;
       text-align: center;
+      background: #06080c;
+      padding: 8px 16px;
+      border-radius: 4px;
     }
     #book-picker {
       position: fixed;
@@ -710,8 +725,7 @@
 
   <!-- Main menu overlay -->
   <div id="main-menu" style="display:none;">
-    <div class="picker-title">BOOK BREAKER</div>
-    <div class="picker-subtitle" id="menu-subtitle"></div>
+    <canvas id="menu-bg-canvas"></canvas>
     <div id="menu-buttons"></div>
   </div>
 

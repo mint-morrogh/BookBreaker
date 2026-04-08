@@ -62,6 +62,7 @@ export const UPGRADE_LABELS: Record<UpgradeType, string> = {
   bigball: 'BIG BALL',
   magnet: 'MAGNET',
   homing: 'HOMING',
+  ghost: 'GHOST',
 }
 
 // Pre-computed dot color ramp (rest → displaced)

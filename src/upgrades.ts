@@ -72,7 +72,7 @@ export function activateUpgrade(pickup: Pickup, state: UpgradeState): UpgradeEve
             backWallHits: 0,
             slamStacks: 0,
             blastCharge: 0,
-            pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0,
+            pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0, ghostLeft: 0, ghostPhasedBricks: new Set(),
           })
         }
       } else {
@@ -92,7 +92,7 @@ export function activateUpgrade(pickup: Pickup, state: UpgradeState): UpgradeEve
             backWallHits: source.backWallHits,
             slamStacks: source.slamStacks,
             blastCharge: 0,
-            pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0,
+            pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0, ghostLeft: 0, ghostPhasedBricks: new Set(),
           })
         }
       }
@@ -126,6 +126,9 @@ export function activateUpgrade(pickup: Pickup, state: UpgradeState): UpgradeEve
     for (const ball of state.balls) {
       ball.pierceLeft = Math.max(ball.pierceLeft, pierceCounts[pickup.tier] ?? 3)
     }
+  } else if (pickup.type === 'ghost') {
+    const ghostCounts = [0, 2, 3, 4, 5]  // tier 1=x2, then +1 per tier
+    for (const ball of state.balls) ball.ghostLeft += ghostCounts[pickup.tier] ?? 2
   }
 
   return events
@@ -341,6 +344,7 @@ export function hitBrick(brick: Brick, ball: Ball, state: UpgradeState): void {
     if (state.ballSizeBonus < 1.0) dropPool.push({ type: 'bigball', weight: 0.12 })
     dropPool.push({ type: 'magnet', weight: 0.14 })
     dropPool.push({ type: 'homing', weight: 0.10 })
+    dropPool.push({ type: 'ghost', weight: 0.10 })
 
     if (dropPool.length === 0) return  // everything maxed, skip drop
 

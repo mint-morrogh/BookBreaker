@@ -34,6 +34,7 @@ export interface RenderState {
   ballSpeed: number  // base ball speed for color intensity calc
   magnetCharges: number
   backWallReveal: number  // 0→1 animation for back wall line appearance
+  tutorialPhase: number   // -1 if not in tutorial, else current phase index
 }
 
 export function renderGame(
@@ -342,7 +343,7 @@ export function renderGame(
       : Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy)
     const speedRatio = state.ballSpeed > 0 ? speed / state.ballSpeed : 0
     // Linear 0-10 from speed hits (log scale matches 1.1x compounding)
-    const rawStep = (ball.stuck && ball.magnetSpeed <= 0) ? 0 : Math.log(Math.max(1, speedRatio)) / Math.log(1.1)
+    const rawStep = (ball.stuck && ball.magnetSpeed <= 0) ? 0 : Math.log(Math.max(1, speedRatio)) / Math.log(1.05)
     // Power curve: stays low early, ramps late (5 hits ≈ index 3 orange, 10 hits = 10 red)
     const intensity = Math.min(10, Math.max(0, Math.round((rawStep / 10) ** 1.6 * 10)))
     const ballColor = BALL_COLORS[intensity]
@@ -377,9 +378,16 @@ export function renderGame(
     ctx.globalAlpha = 1
 
     // Ball body — triangle when homing, circle otherwise
-    ctx.fillStyle = ballColor
+    // Ghost: outline only (no fill), works with all shapes
+    const isGhost = ball.ghostLeft > 0
     ctx.shadowColor = ballColor
     ctx.shadowBlur = 15 + intensity * 3
+    if (isGhost) {
+      ctx.strokeStyle = ballColor
+      ctx.lineWidth = 2
+    } else {
+      ctx.fillStyle = ballColor
+    }
     if (ball.homingLeft > 0) {
       // Triangle pointing in velocity direction (or up if stuck)
       const angle = ball.stuck ? -Math.PI / 2 : Math.atan2(ball.vy, ball.vx)
@@ -389,11 +397,11 @@ export function renderGame(
       ctx.lineTo(ball.x + Math.cos(angle + 2.4) * r, ball.y + Math.sin(angle + 2.4) * r)
       ctx.lineTo(ball.x + Math.cos(angle - 2.4) * r, ball.y + Math.sin(angle - 2.4) * r)
       ctx.closePath()
-      ctx.fill()
+      if (isGhost) ctx.stroke(); else ctx.fill()
     } else {
       ctx.beginPath()
       ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2)
-      ctx.fill()
+      if (isGhost) ctx.stroke(); else ctx.fill()
     }
     ctx.shadowBlur = 0
 
@@ -410,6 +418,9 @@ export function renderGame(
       ctx.shadowBlur = 0
     }
 
+    // Upgrade indicators — uniform gap from ball edge, scales with ball size
+    const indGap = ball.r + 6
+
     // Homing indicator — left side of ball
     if (ball.homingLeft > 0) {
       ctx.fillStyle = '#c084fc'
@@ -417,9 +428,20 @@ export function renderGame(
       ctx.shadowBlur = 6
       ctx.font = `bold 10px 'JetBrains Mono', monospace`
       ctx.textAlign = 'right'
-      ctx.fillText(`×${ball.homingLeft}◀`, ball.x - ball.r - 4, ball.y)
+      ctx.fillText(`x${ball.homingLeft}<`, ball.x - indGap, ball.y + 4)
       ctx.shadowBlur = 0
       ctx.textAlign = 'center'
+    }
+
+    // Ghost indicator — above ball
+    if (ball.ghostLeft > 0) {
+      ctx.fillStyle = '#94a3b8'
+      ctx.shadowColor = '#94a3b8'
+      ctx.shadowBlur = 6
+      ctx.font = `bold 10px 'JetBrains Mono', monospace`
+      ctx.textAlign = 'center'
+      ctx.fillText(`x${ball.ghostLeft}`, ball.x, ball.y - indGap)
+      ctx.shadowBlur = 0
     }
 
     // Piercing indicator — right side of ball
@@ -430,8 +452,10 @@ export function renderGame(
       ctx.shadowColor = pierceColor
       ctx.shadowBlur = 6
       ctx.font = `bold 10px 'JetBrains Mono', monospace`
-      ctx.fillText(`▶${ball.pierceLeft}`, ball.x + ball.r + 6, ball.y)
+      ctx.textAlign = 'left'
+      ctx.fillText(`>${ball.pierceLeft}`, ball.x + indGap, ball.y + 4)
       ctx.shadowBlur = 0
+      ctx.textAlign = 'center'
     }
   }
 
@@ -458,6 +482,18 @@ export function renderGame(
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillText(state.isMobile ? '[ HOLD to move · 2nd finger to launch ]' : '[ CLICK to slam-launch · SPACE also works ]', W / 2, state.paddleY + 60)
+  }
+
+  // Slam hint — only during tutorial slam phase (phase 2)
+  if (state.tutorialPhase === 2 && state.started && state.levelState === 'playing') {
+    ctx.fillStyle = '#fbbf24'
+    ctx.shadowColor = '#fbbf24'
+    ctx.shadowBlur = 8
+    ctx.font = `bold 13px 'JetBrains Mono', monospace`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(state.isMobile ? '[ TAP with other finger to slam ]' : '[ CLICK to slam the paddle forward ]', W / 2, state.paddleY + 60)
+    ctx.shadowBlur = 0
   }
 
   // Charge recall hint — only shown until first recall

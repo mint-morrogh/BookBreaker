@@ -81,9 +81,9 @@ export function updateBalls(
       ball.vy = -Math.abs(ball.vy)
       if (state.backWallActive && ball.backWallHits < 10) {
         ball.backWallHits++
-        // 1.1x speed boost per hit
-        ball.vx *= 1.1
-        ball.vy *= 1.1
+        // 1.05x speed boost per hit (10 hits → ~1.63x total)
+        ball.vx *= 1.05
+        ball.vy *= 1.05
         // Popup text
         const msgs = ['BACK WALL!', 'SPEED UP!', 'DANGER ZONE!', 'RISKY!', 'BLAZING!',
           'ON FIRE!', 'UNSTOPPABLE!', 'LUDICROUS!', 'MAXIMUM!', 'OVERDRIVE!']
@@ -137,7 +137,7 @@ export function updateBalls(
       // Shed one back-wall speed stack on each paddle hit
       const hadStacks = ball.backWallHits > 0
       if (hadStacks) ball.backWallHits--
-      const postShedSpeed = hadStacks ? speed / 1.1 : speed
+      const postShedSpeed = hadStacks ? speed / 1.05 : speed
 
       // Magnet catch: only when paddle is at rest (not slamming), preserves momentum
       if (state.magnetCharges > 0 && ball.magnetImmunity <= 0 && !state.slamActive) {
@@ -156,8 +156,8 @@ export function updateBalls(
 
       // Normal bounce — apply the shed to velocity
       if (hadStacks) {
-        ball.vx /= 1.1
-        ball.vy /= 1.1
+        ball.vx /= 1.05
+        ball.vy /= 1.05
       }
       // Angle based on where it hit the paddle
       const hitPos = (ball.x - state.paddleX) / state.paddleW // 0..1
@@ -198,32 +198,33 @@ export function updateBalls(
         }
 
         if (slamTier > 0) {
-          // Good = speed only, Great = 1 pierce, Perfect = 2 pierce
-          ball.pierceLeft = Math.max(0, slamTier - 1)
+          // Great = +1 pierce, Perfect = +2 pierce (keeps best of existing or slam)
+          const slamPierce = Math.max(0, slamTier - 1)
+          ball.pierceLeft = Math.max(ball.pierceLeft, slamPierce)
 
-          // Slam speed boost — 1.1x per tier, symmetrical with decay
+          // Slam speed boost — 1.05x per tier, symmetrical with decay
           const newStacks = Math.min(10, ball.slamStacks + slamTier)
           const stacksAdded = newStacks - ball.slamStacks
           ball.slamStacks = newStacks
           for (let s = 0; s < stacksAdded; s++) {
-            ball.vx *= 1.1
-            ball.vy *= 1.1
+            ball.vx *= 1.05
+            ball.vy *= 1.05
           }
           events.push({ type: 'paddleSlam', ball, tier: slamTier })
         } else {
           // Camping at wall — treat like a normal paddle hit, shed a stack
           if (ball.slamStacks > 0) {
             ball.slamStacks--
-            ball.vx /= 1.1
-            ball.vy /= 1.1
+            ball.vx /= 1.05
+            ball.vy /= 1.05
           }
         }
       } else {
         // Non-slam paddle hit: shed one slam speed stack (decays like backwall)
         if (ball.slamStacks > 0) {
           ball.slamStacks--
-          ball.vx /= 1.1
-          ball.vy /= 1.1
+          ball.vx /= 1.05
+          ball.vy /= 1.05
         }
       }
       // Normal hit without slam: keep existing pierce charges (don't reset)
@@ -240,6 +241,16 @@ export function updateBalls(
         ball.y + ball.r > by &&
         ball.y - ball.r < by + brick.h
       ) {
+        if (ball.ghostLeft > 0) {
+          if (!ball.ghostPhasedBricks.has(brick)) {
+            ball.ghostPhasedBricks.add(brick)
+            ball.ghostLeft--
+            // Clear the set when ghost runs out so it doesn't hold stale refs
+            if (ball.ghostLeft <= 0) ball.ghostPhasedBricks.clear()
+          }
+          continue  // ghost through — brick stays alive, ball phases through
+        }
+
         events.push({ type: 'brickHit', brick, ball })
 
         if (ball.pierceLeft > 0) {
