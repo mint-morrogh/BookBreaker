@@ -1,61 +1,24 @@
 import { prepareWithSegments, layoutWithLines } from '@chenglou/pretext'
 import { BOOKS, type Book } from './content'
 import type { WordTag } from './tagger'
-import type { Brick, Ball, Particle, Pickup, Dot, Shrapnel, ShopItem, ShopRarity } from './types'
-import { scoreWord, getHighScores, saveHighScore } from './scoring'
+import type { Brick, Ball, Particle, Pickup, Dot, Shrapnel, ShopItem } from './types'
+import { scoreWord, getHighScores, saveHighScore, markBookBeaten } from './scoring'
 export { getTopScore } from './scoring'
-import { TAG_COLORS, wordColor, setActiveTagMap, colorTier } from './colors'
+import { TAG_COLORS, PUNCTUATION_COLOR, wordColor, isPunctuation, setActiveTagMap, colorTier } from './colors'
 import { sidebarEls, initLetterGrid, clearWordLog, flushWordLog } from './sidebar'
-import { renderGameOver, renderPause, roundRect } from './renderer'
+import { renderGameOver, renderPause, renderTutorialComplete } from './renderer'
 import { updateBalls, type PhysicsState } from './physics'
 import { activateUpgrade as runActivateUpgrade, hitBrick as runHitBrick, type UpgradeState } from './upgrades'
 import { renderGame, type RenderState } from './render-game'
-
-// ── Shop rarity system ─────────────────────────────────────────
-const RARITY_COLORS: Record<ShopRarity, string> = {
-  common: '#6b7280',     // gray
-  uncommon: '#4ade80',   // green
-  rare: '#7dd3fc',       // cyan
-  epic: '#c084fc',       // purple
-}
-const RARITY_LABELS: Record<ShopRarity, string> = {
-  common: 'COMMON', uncommon: 'UNCOMMON', rare: 'RARE', epic: 'EPIC',
-}
-// Roll rarity with weighted odds: common 45%, uncommon 30%, rare 18%, epic 7%
-function rollRarity(): ShopRarity {
-  const r = Math.random()
-  if (r < 0.45) return 'common'
-  if (r < 0.75) return 'uncommon'
-  if (r < 0.93) return 'rare'
-  return 'epic'
-}
-// Price multiplier per rarity
-const RARITY_PRICE: Record<ShopRarity, number> = {
-  common: 0.8, uncommon: 1.0, rare: 1.3, epic: 1.7,
-}
-
-// ── Shop item pool ─────────────────────────────────────────────
-// base price is scaled by rarity multiplier on generation
-interface ShopPoolEntry {
-  id: string; name: string; desc: string; basePrice: number
-  isLife?: boolean // guaranteed slot
-}
-const SHOP_POOL: ShopPoolEntry[] = [
-  { id: 'life1', name: '+1 LIFE', desc: 'Extra life', basePrice: 75, isLife: true },
-  { id: 'life3', name: '+3 LIVES', desc: 'Three extra lives', basePrice: 180, isLife: true },
-  { id: 'widen1', name: 'WIDEN', desc: 'Expand paddle', basePrice: 60 },
-  { id: 'widen2', name: 'WIDEN x2', desc: 'Double expand', basePrice: 110 },
-  { id: 'multi', name: 'MULTIBALL', desc: 'Start with 3 balls', basePrice: 70 },
-  { id: 'safety2', name: 'SAFETY +2', desc: 'Safety bar +2 hits', basePrice: 60 },
-  { id: 'safety4', name: 'SAFETY +4', desc: 'Safety bar +4 hits', basePrice: 110 },
-  { id: 'blast', name: 'BLAST', desc: 'Explosive ball charge', basePrice: 80 },
-  { id: 'pierce', name: 'PIERCE +3', desc: 'Punch through bricks', basePrice: 70 },
-  { id: 'lucky', name: 'LUCKY DROPS', desc: 'Upgrade drop chance +2%', basePrice: 65 },
-]
+import { generateShopItems, isShopItemMaxed, renderShop, type ShopRenderState } from './shop'
+import { detectIslands, updateIslandGroups, type IslandGroup } from './islands'
+import { saveToStorage, loadFromStorage, clearSave, type SaveState } from './save'
+import { TutorialController, markTutorialDone } from './tutorial'
 
 // ── Upgrade caps ──────────────────────────────────────────────
 export const MAX_WIDEN = 8
 export const MAX_SAFETY = 8
+const BASE_BALL_R = 5.6  // default ball radius (20% smaller than legacy 7)
 
 // ── Game ────────────────────────────────────────────────────────
 // Fixed virtual resolution — all game logic runs in this coordinate space
@@ -105,6 +68,8 @@ export class Game {
   private wordsInParagraph: string[] = []
   private wordCursor = 0
   private totalWordsInParagraph = 0
+  private levelBasePoints = 0     // sum of raw base points for all bricks in this paragraph
+  private levelParagraphCount = 1 // how many paragraphs this level spans
 
   // particles
   private particles: Particle[] = []
@@ -126,11 +91,18 @@ export class Game {
   private freezeTimer = 0         // seconds remaining of freeze (scroll stops)
   private baseDriftSpeed = 6.4    // normal drift speed
 
+  // back wall — activates after all bricks enter play space
+  private backWallActive = false
+  private backWallReveal = 0      // 0→1 animation progress
+
   // charge mechanic
   private charge = 0              // 0-1, fills as bricks break, click to recall ball
 
   // shop bonuses (persist across levels, reset on restart)
   private dropBonus = 0           // flat % added to upgrade drop chance (Lucky Drops)
+  private ballSizeBonus = 0       // 0-1.0 (0%-100%), each tier adds 0.1, cap 1.0
+  private magnetCharges = 0       // remaining magnet catches (ball sticks to paddle)
+  private _homingDbg = 0           // debug throttle timer (temp)
 
   // dot field
   private dots: Dot[] = []
@@ -196,20 +168,20 @@ export class Game {
   private sidebarTimer = 0
   private purgeTimer = 0
   private islandCheckTimer = 0
-  private islandGroups = new Map<number, {
-    cx0: number; cy0: number      // initial centroid
-    vx: number; vy: number        // shared velocity
-    rotSpeed: number              // rotation speed (rad/s)
-    angle: number                 // accumulated angle
-    timer: number                 // countdown to pop
-    initTimer: number             // initial timer value (for elapsed calc)
-  }>()
+  private islandGroups = new Map<number, IslandGroup>()
   private nextIslandId = 1
 
-  constructor(canvas: HTMLCanvasElement, bookIdx: number, tagMap: Map<string, WordTag>) {
+  // tutorial
+  tutorial: TutorialController | null = null
+  private _bookIdx = -1
+  onGameEnd?: () => void  // callback when tutorial ends
+
+  constructor(canvas: HTMLCanvasElement, bookIdx: number, tagMap: Map<string, WordTag>, tutorial?: TutorialController | null) {
     this.canvas = canvas
     this.ctx = canvas.getContext('2d')!
-    this.book = this.mergeShortParagraphs(BOOKS[bookIdx])
+    this._bookIdx = bookIdx
+    this.tutorial = tutorial ?? null
+    this.book = this.tutorial ? BOOKS[bookIdx] : this.mergeShortParagraphs(BOOKS[bookIdx])
     setActiveTagMap(tagMap)
     // Detect mobile before resize so virtual width can adapt
     this.isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0
@@ -247,6 +219,7 @@ export class Game {
     this.canvas.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return
       if (this.gameOver) {
+        if (this.onGameEnd) { this.onGameEnd(); return }
         this.restart()
       } else if (this.paused) {
         this.paused = false
@@ -256,21 +229,21 @@ export class Game {
         const vy = (e.clientY - rect.top) / rect.height * this.H
         this.handleShopClick(vx, vy)
       } else if (this.levelState === 'endGrade' && this.endTimer > 1.0) {
-        if (this.lives <= 0 || this.endGrade === 'D' || this.endGrade === 'F') {
+        if (this.tutorial) {
           this.gameOver = true
-          Game.clearSave()
+          markTutorialDone()
+          const prevTop = getHighScores(this.book.title)[0] ?? 0
+          this.endScores = saveHighScore(this.book.title, this.score)
+          this.isNewHigh = this.score > 0 && this.score >= prevTop
+        } else if (this.lives <= 0 || this.endGrade === 'D' || this.endGrade === 'F') {
+          this.gameOver = true
+          clearSave()
           const prevTop = getHighScores(this.book.title)[0] ?? 0
           this.endScores = saveHighScore(this.book.title, this.score)
           this.isNewHigh = this.score > 0 && this.score >= prevTop
         } else {
           this.paragraphsCompleted++
-          if (this.paragraphsCompleted % 3 === 0) {
-            this.openShop()
-          } else {
-            this.levelState = 'playing'
-            this.levelWords = []
-            this.advanceLevel()
-          }
+          this.openShop()
         }
       } else {
         // Slam paddle — launches stuck ball on slam start
@@ -312,7 +285,11 @@ export class Game {
       e.preventDefault()
 
       // State transitions — any touch
-      if (this.gameOver) { this.restart(); return }
+      if (this.gameOver) {
+        if (this.onGameEnd) { this.onGameEnd(); return }
+        this.restart()
+        return
+      }
       if (this.paused) { this.paused = false; return }
       if (this.levelState === 'shop') {
         const touch = e.changedTouches[0]
@@ -325,21 +302,21 @@ export class Game {
         return
       }
       if (this.levelState === 'endGrade' && this.endTimer > 1.0) {
-        if (this.lives <= 0 || this.endGrade === 'D' || this.endGrade === 'F') {
+        if (this.tutorial) {
           this.gameOver = true
-          Game.clearSave()
+          markTutorialDone()
+          const prevTop = getHighScores(this.book.title)[0] ?? 0
+          this.endScores = saveHighScore(this.book.title, this.score)
+          this.isNewHigh = this.score > 0 && this.score >= prevTop
+        } else if (this.lives <= 0 || this.endGrade === 'D' || this.endGrade === 'F') {
+          this.gameOver = true
+          clearSave()
           const prevTop = getHighScores(this.book.title)[0] ?? 0
           this.endScores = saveHighScore(this.book.title, this.score)
           this.isNewHigh = this.score > 0 && this.score >= prevTop
         } else {
           this.paragraphsCompleted++
-          if (this.paragraphsCompleted % 3 === 0) {
-            this.openShop()
-          } else {
-            this.levelState = 'playing'
-            this.levelWords = []
-            this.advanceLevel()
-          }
+          this.openShop()
         }
         return
       }
@@ -390,12 +367,12 @@ export class Game {
     window.addEventListener('touchend', handleTouchEnd)
     window.addEventListener('touchcancel', handleTouchEnd)
 
-    // Pause on focus loss
+    // Pause on any focus loss — tab switch, app switch, etc.
     window.addEventListener('blur', () => {
-      if (this.started && !this.gameOver) this.paused = true
+      if (!this.gameOver) this.paused = true
     })
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden && this.started && !this.gameOver) this.paused = true
+      if (document.hidden && !this.gameOver) this.paused = true
     })
   }
 
@@ -439,7 +416,12 @@ export class Game {
     this.ctx.setTransform(this.scale, 0, 0, this.scale, 0, 0)
 
     // Scale drift speed proportional to field height so timing stays consistent
-    this.baseDriftSpeed = 6.4 * (this.H / VIRTUAL_H)
+    // Slightly faster for harder difficulties (imperceptible per step, adds up)
+    const diffMult = this.book.difficulty === 'Medium' ? 1.08
+      : this.book.difficulty === 'Hard' ? 1.18
+      : this.book.difficulty === 'Very Hard' ? 1.28
+      : 1.0  // Easy / Custom
+    this.baseDriftSpeed = 6.4 * diffMult * (this.H / VIRTUAL_H)
     if (this.freezeTimer <= 0) this.bricksDriftSpeed = this.baseDriftSpeed
 
     // Heavy reinitialization only when not actively playing
@@ -450,7 +432,7 @@ export class Game {
       this.paddleTargetY = this.paddleBaseY
       this.prevPaddleY = this.paddleBaseY
       this.measurePaddle()
-      this.brickFontSize = 15
+      this.brickFontSize = this.tutorial?.fontSize ?? (this.tutorial?.largeBricks ? 22 : 15)
       this.brickLineH = this.brickFontSize + 6
       this.brickFont = `${this.brickFontSize}px 'JetBrains Mono', 'Courier New', monospace`
       this.initDots()
@@ -528,20 +510,55 @@ export class Game {
   }
 
   // ── Chapter / Paragraph / Brick loading ─────────────────────
+  // Each "level" loads up to 3 consecutive paragraphs with gaps between them
+  private static readonly PARA_BREAK = '\x00'  // sentinel for paragraph gap
+  private static readonly PARAS_PER_LEVEL = 3
+
   private loadParagraph(chapterIdx: number, paragraphIdx: number) {
     this.chapterIdx = chapterIdx % this.book.chapters.length
     const chapter = this.book.chapters[this.chapterIdx]
     this.paragraphIdx = paragraphIdx % chapter.paragraphs.length
-    const text = chapter.paragraphs[this.paragraphIdx]
-    this.wordsInParagraph = text.split(/\s+/).filter(w => w.length > 0)
-    this.totalWordsInParagraph = this.wordsInParagraph.length
+
+    // Tutorial: apply custom brick font size per phase
+    if (this.tutorial) {
+      this.brickFontSize = this.tutorial.fontSize ?? (this.tutorial.largeBricks ? 22 : 15)
+      this.brickLineH = this.brickFontSize + 6
+      this.brickFont = `${this.brickFontSize}px 'JetBrains Mono', 'Courier New', monospace`
+    }
+
+    // Combine paragraphs — tutorial loads 1 at a time, normal loads up to 3
+    const words: string[] = []
+    const parasPerLevel = this.tutorial ? 1 : Game.PARAS_PER_LEVEL
+    const count = Math.min(parasPerLevel, chapter.paragraphs.length - this.paragraphIdx)
+    for (let i = 0; i < count; i++) {
+      if (i > 0) words.push(Game.PARA_BREAK)
+      const text = chapter.paragraphs[this.paragraphIdx + i]
+      for (const token of text.split(/\s+/).filter(w => w.length > 0)) {
+        // Split leading/trailing punctuation into separate bricks
+        const m = token.match(/^([^a-zA-Z0-9'']*)(.+?)([^a-zA-Z0-9'']*)$/)
+        if (m) {
+          if (m[1]) words.push(m[1])
+          words.push(m[2])
+          if (m[3]) words.push(m[3])
+        } else {
+          words.push(token)
+        }
+      }
+    }
+    // Track how many paragraphs this level spans (for advanceLevel)
+    this.levelParagraphCount = count
+
+    this.wordsInParagraph = words
+    this.totalWordsInParagraph = words.filter(w => w !== Game.PARA_BREAK).length
+    this.levelBasePoints = 0
     this.wordCursor = 0
     this.bricks = []
     this.bricksScrollY = 0
     this.brickHitThisLevel = false
     this.islandGroups.clear()
     this.nextIslandId = 1
-    this.spawnBrickRows(8, this.H * 0.85)
+    // Spawn enough rows to fill from start to well below the screen
+    this.spawnBrickRows(30, this.H * 0.70)
   }
 
   private spawnBrickRows(rowCount: number, startWorldY?: number) {
@@ -558,21 +575,29 @@ export class Game {
     }
 
     for (let row = 0; row < rowCount; row++) {
+      // Paragraph break — just consume the sentinel and keep flowing
+      while (this.wordCursor < this.wordsInParagraph.length && this.wordsInParagraph[this.wordCursor] === Game.PARA_BREAK) {
+        this.wordCursor++
+      }
+
       let curX = margin
       let rowH = this.brickLineH + this.brickPadY * 2
       const rowBricks: Brick[] = []
 
       while (curX < areaW + margin && this.wordCursor < this.wordsInParagraph.length) {
         const word = this.wordsInParagraph[this.wordCursor]
-        // Use pretext to measure word width
+        if (word === Game.PARA_BREAK) break  // stop row at paragraph boundary
         const prepared = prepareWithSegments(word, this.brickFont)
         const result = layoutWithLines(prepared, 9999, this.brickLineH)
         const textW = result.lines.length > 0 ? result.lines[0].width : word.length * this.brickFontSize * 0.6
-        const bw = textW + this.brickPadX * 2
+        const isPunc = isPunctuation(word)
+        // Minimum brick width so punctuation bricks are hittable
+        const bw = Math.max(isPunc ? 28 : 0, textW + this.brickPadX * 2)
 
         if (curX + bw > areaW + margin && rowBricks.length > 0) break
 
-        const color = wordColor(word)
+        let color = wordColor(word)
+        if (this.tutorial) color = this.tutorial.overrideBrickColor(color, this.wordCursor)
         const isStop = color === TAG_COLORS.stopword
         const brick: Brick = {
           word,
@@ -583,7 +608,7 @@ export class Game {
           alive: true,
           alpha: 1,
           color,
-          points: scoreWord(word, isStop),
+          points: isPunc ? 5 : scoreWord(word, isStop),
           boxed: true,
           breakOff: 0,
           breakOffVx: 0,
@@ -594,58 +619,144 @@ export class Game {
         }
         rowBricks.push(brick)
         this.bricks.push(brick)
+        this.levelBasePoints += brick.points
         curX += bw + gapX
         this.wordCursor++
       }
 
-      // ── Justify row: distribute extra space so bricks fill edge-to-edge ──
-      // Skip justification for the last row of the paragraph (ragged is fine)
-      const isLastRow = this.wordCursor >= this.wordsInParagraph.length
-      if (rowBricks.length > 1 && !isLastRow) {
-        const usedW = rowBricks.reduce((sum, b) => sum + b.w, 0)
-        const totalGapSpace = areaW - usedW
-        const gapCount = rowBricks.length - 1
-        const justifiedGap = totalGapSpace / gapCount
+      // No words placed — all content exhausted, stop spawning
+      if (rowBricks.length === 0) break
 
-        let jx = margin
-        for (const b of rowBricks) {
-          b.x = jx
-          jx += b.w + justifiedGap
+      // ── Paragraph break after partial row — just consume, no filler rows ──
+      if (this.wordCursor < this.wordsInParagraph.length
+        && this.wordsInParagraph[this.wordCursor] === Game.PARA_BREAK) {
+        this.wordCursor++
+      }
+
+      // ── Center row with uniform gaps, pad sides with fillers ──
+      if (rowBricks.length > 0) {
+        const usedW = rowBricks.reduce((sum, b) => sum + b.w, 0) + (rowBricks.length - 1) * gapX
+        const centerOffset = (areaW - usedW) / 2
+        for (const b of rowBricks) b.x += centerOffset
+
+        // Fill remaining space on left and right with uniform-sized filler bricks
+        const firstX = rowBricks[0].x
+        const lastB = rowBricks[rowBricks.length - 1]
+        const lastX = lastB.x + lastB.w
+        const leftGap = firstX - margin
+        const rightGap = (margin + areaW) - lastX
+        const fillerW = 28  // same as min punctuation brick width
+
+        const spawnFillers = (startX: number, totalW: number) => {
+          if (totalW < fillerW) return
+          const fitW = fillerW + gapX
+          const count = Math.max(1, Math.floor((totalW + gapX) / fitW))
+          const actualW = (totalW - gapX * (count - 1)) / count
+          for (let i = 0; i < count; i++) {
+            this.bricks.push({
+              word: '', x: startX + i * (actualW + gapX), y: curY,
+              w: actualW, h: rowH,
+              alive: true, alpha: 1, color: '#3a3f4a', points: 0, boxed: true,
+              breakOff: 0, breakOffVx: 0, breakOffAngle: 0,
+              breakOffGroupId: 0, breakOffOrigX: 0, breakOffOrigY: 0,
+            })
+          }
         }
+
+        if (leftGap > gapX + 10) spawnFillers(margin, leftGap - gapX)
+        if (rightGap > gapX + 10) spawnFillers(lastX + gapX, rightGap - gapX)
       }
 
       curY += rowH + gapY
     }
   }
 
+
   // ── Ball ────────────────────────────────────────────────────
+  private get ballR(): number {
+    return BASE_BALL_R * (1 + this.ballSizeBonus)
+  }
+
   private spawnBall() {
     this.balls.push({
       x: this.paddleX + this.paddleW / 2,
       y: this.paddleY + this.paddleH + 10,
       vx: 0,
       vy: 0,
-      r: 7,
+      r: this.ballR,
       trail: [],
       stuck: true,
       backWallHits: 0,
       slamStacks: 0,
       blastCharge: 0,
       pierceLeft: 0,
+      magnetSpeed: 0,
+      magnetImmunity: 0,
+      homingLeft: 0,
+      homingCooldown: 0,
     })
+  }
+
+  /** Update radius on all existing balls after size bonus changes */
+  private applyBallSize() {
+    const r = this.ballR
+    for (const ball of this.balls) ball.r = r
   }
 
   private launchBalls() {
     for (const ball of this.balls) {
       if (ball.stuck) {
         ball.stuck = false
-        const angle = -Math.PI / 2 + (Math.random() - 0.5) * 0.6
-        ball.vx = Math.cos(angle) * this.ballSpeed
-        ball.vy = Math.sin(angle) * this.ballSpeed
+        const wasMagnet = ball.magnetSpeed > 0
+        const speed = wasMagnet ? ball.magnetSpeed : this.ballSpeed
+        ball.magnetSpeed = 0
+        if (wasMagnet) ball.magnetImmunity = 0.15  // prevent immediate re-catch
+
+        if (ball.homingLeft > 0) {
+          // Homing: aim at highest-value visible brick (steering continues in-flight)
+          const target = this.findHomingTarget(ball)
+          if (target) {
+            const bsy = target.y - this.bricksScrollY
+            const dx = (target.x + target.w / 2) - ball.x
+            const dy = (bsy + target.h / 2) - ball.y
+            const angle = Math.atan2(dy, dx)
+            ball.vx = Math.cos(angle) * speed
+            ball.vy = Math.sin(angle) * speed
+          } else {
+            const angle = -Math.PI / 2 + (Math.random() - 0.5) * 0.6
+            ball.vx = Math.cos(angle) * speed
+            ball.vy = Math.sin(angle) * speed
+          }
+          // Don't decrement here — decrement on brick hit so ball curves until impact
+        } else {
+          const angle = -Math.PI / 2 + (Math.random() - 0.5) * 0.6
+          ball.vx = Math.cos(angle) * speed
+          ball.vy = Math.sin(angle) * speed
+        }
+
         this.started = true
         this.hasLaunched = true
       }
     }
+  }
+
+  /** Find nearest alive brick in ball's forward half-plane for homing */
+  private findHomingTarget(ball: Ball): Brick | null {
+    let best: Brick | null = null
+    let bestDist = Infinity
+    for (const b of this.bricks) {
+      if (!b.alive || b.breakOff > 0) continue
+      const screenY = b.y - this.bricksScrollY
+      if (screenY < -50 || screenY > this.H + 50) continue
+      const dx = (b.x + b.w / 2) - ball.x
+      const dy = (screenY + b.h / 2) - ball.y
+      const dist = dx * dx + dy * dy
+      if (dist < bestDist) {
+        bestDist = dist
+        best = b
+      }
+    }
+    return best
   }
 
   private recallBall() {
@@ -720,9 +831,23 @@ export class Game {
     if (this.paused) return
     if (this.gameOver) {
       if (this.keysDown.has(' ') || this.keysDown.has('Enter')) {
+        if (this.onGameEnd) { this.onGameEnd(); return }
         this.restart()
       }
       return
+    }
+
+    // ── Tutorial state machine (logic lives in tutorial.ts) ──
+    if (this.tutorial?.isTransitioning) {
+      const action = this.tutorial.tick(dt, this.pickups.length > 0)
+      if (action === 'advanceLevel') { this.advanceLevel(); return }
+      if (action === 'startEndSequence') { this.startEndSequence(); return }
+      if (action === 'tickParticlesReturn') {
+        this.tickParticlesAndFade(dt)
+        return
+      }
+      // 'runPickupsAndReturn' / 'normalGameplay' — fall through to normal update
+      // (balls bounce, safety patrols, pickups float, dots animate)
     }
 
     // ── End-of-chapter sequence (all in-field, no overlays) ──
@@ -758,7 +883,12 @@ export class Game {
       // When all grays popped, brief pause for final particles then transition
       const popDuration = this.grayPopBricks.length / popsPerSec + 0.6
       if (this.grayPopIdx >= this.grayPopBricks.length && this.grayPopTimer > popDuration) {
-        this.startEndSequence()
+        if (this.tutorial && !this.tutorial.isLastPhase) {
+          this.levelState = 'playing'
+          this.handleTutorialLevelClear()
+        } else {
+          this.startEndSequence()
+        }
       }
       return
     }
@@ -832,7 +962,8 @@ export class Game {
       if (tallyDone && this.endPenaltyShown && this.endTimer > tallyEndTime + penaltyDelay) {
         // Calculate grade
         const pct = this.endTotalWords > 0 ? this.endBrokenWords / this.endTotalWords : 0
-        if (pct >= 1.0 && this.levelLivesLost === 0) this.endGrade = 'S'
+        const scoreRatio = this.levelBasePoints > 0 ? this.endTallyScore / this.levelBasePoints : 0
+        if (pct >= 1.0 && this.levelLivesLost === 0 && scoreRatio >= 2.5) this.endGrade = 'S'
         else if (pct >= 0.90) this.endGrade = 'A'
         else if (pct >= 0.75) this.endGrade = 'B'
         else if (pct >= 0.60) this.endGrade = 'C'
@@ -852,21 +983,21 @@ export class Game {
       this.endTimer += dt
       this.tickParticlesAndFade(dt)
       if (this.endTimer > 1.0 && (this.keysDown.has(' ') || this.keysDown.has('Enter'))) {
-        if (this.lives <= 0 || this.endGrade === 'D' || this.endGrade === 'F') {
+        if (this.tutorial) {
           this.gameOver = true
-          Game.clearSave()
+          markTutorialDone()
+          const prevTop = getHighScores(this.book.title)[0] ?? 0
+          this.endScores = saveHighScore(this.book.title, this.score)
+          this.isNewHigh = this.score > 0 && this.score >= prevTop
+        } else if (this.lives <= 0 || this.endGrade === 'D' || this.endGrade === 'F') {
+          this.gameOver = true
+          clearSave()
           const prevTop = getHighScores(this.book.title)[0] ?? 0
           this.endScores = saveHighScore(this.book.title, this.score)
           this.isNewHigh = this.score > 0 && this.score >= prevTop
         } else {
           this.paragraphsCompleted++
-          if (this.paragraphsCompleted % 3 === 0) {
-            this.openShop()
-          } else {
-            this.levelState = 'playing'
-            this.levelWords = []
-            this.advanceLevel()
-          }
+          this.openShop()
         }
       }
       return
@@ -958,119 +1089,74 @@ export class Game {
         this.spawnMoreBricks()
       }
 
+      // Back wall activates once all bricks have scrolled into the play area
+      if (!this.backWallActive && this.wordCursor >= this.wordsInParagraph.length && lowestBrickY < this.H - 10) {
+        this.backWallActive = true
+      }
+      if (this.backWallActive && this.backWallReveal < 1) {
+        this.backWallReveal = Math.min(1, this.backWallReveal + dt * 2.5)  // ~0.4s reveal
+      }
+
       // Island detection — check every 0.5s for disconnected brick groups
       // Only after a ball has broken at least one brick (prevents false breakoffs from layout gaps)
       this.islandCheckTimer -= dt
-      if (this.islandCheckTimer <= 0 && this.levelState === 'playing' && this.brickHitThisLevel) {
-        this.detectIslands()
+      const breakoffsAllowed = !this.tutorial || this.tutorial.breakoffsEnabled
+      if (this.islandCheckTimer <= 0 && this.levelState === 'playing' && this.brickHitThisLevel && breakoffsAllowed) {
+        this.runIslandDetection()
         this.islandCheckTimer = 0.5
       }
 
       // Break-off groups — move as unified icebergs, then pop together
-      for (const [groupId, grp] of this.islandGroups) {
-        grp.timer -= dt
-
-        // Compute elapsed translation
-        const bricksInGroup = this.bricks.filter(b => b.alive && b.breakOffGroupId === groupId)
-        if (bricksInGroup.length === 0) { this.islandGroups.delete(groupId); continue }
-
-        // Move each brick: translate + rotate as rigid body around group centroid
-        const elapsed = grp.initTimer - grp.timer
-        grp.angle += grp.rotSpeed * dt
-        const cx = grp.cx0 + grp.vx * elapsed
-        const cy = grp.cy0 + grp.vy * elapsed
-        const cosA = Math.cos(grp.angle)
-        const sinA = Math.sin(grp.angle)
-        for (const b of bricksInGroup) {
-          // Offset from original centroid to brick center
-          const dx = (b.breakOffOrigX + b.w / 2) - grp.cx0
-          const dy = (b.breakOffOrigY + b.h / 2) - grp.cy0
-          // Rotate offset, then translate to new centroid
-          b.x = cx + dx * cosA - dy * sinA - b.w / 2
-          b.y = cy + dx * sinA + dy * cosA - b.h / 2
-          b.breakOff = grp.timer
-          b.breakOffAngle = grp.angle
-        }
-
-        if (grp.timer <= 0) {
-          // Pop all bricks in this group simultaneously
-          const groupSize = bricksInGroup.length
-          let totalBonus = 0
-          for (const b of bricksInGroup) {
-            b.alive = false
-            const bonus = Math.round(b.points * groupSize)
-            totalBonus += bonus
-            this.score += bonus
-            this.wordsBroken++
-            this.multiplier = Math.min(10.0, this.multiplier + 0.3)
-            this.levelWords.push({ word: b.word, color: b.color, points: bonus })
-
-            // Fill charge bar for each brick in the group
-            if (this.charge < 1.0) {
-              this.charge = Math.min(1.0, this.charge + 0.067)
-            }
-
-            // Collect letters
-            for (const ch of b.word.toUpperCase()) {
-              if (ch >= 'A' && ch <= 'Z') {
-                this.letterCounts[ch] = (this.letterCounts[ch] || 0) + 1
-              }
-            }
-
-            // Rainbow particles — keep each brick's original color
-            {
-              const bsy = b.y - this.bricksScrollY
-              for (let i = 0; i < b.word.length; i++) {
-                this.particles.push({
-                  x: b.x + (i / b.word.length) * b.w + 8,
-                  y: bsy + b.h / 2,
-                  vx: (Math.random() - 0.5) * 300,
-                  vy: (Math.random() - 0.5) * 300,
-                  char: b.word[i], life: 1.0, maxLife: 1.2,
-                  color: b.color, size: 16,
-                })
-              }
-              // Gold coin for break-off bonus (stopwords give nothing)
-              const bTier = colorTier(b.color)
-              const goldAmt = bTier <= 0 ? 0 : bTier === 1 ? 1 : bTier === 2 ? 2 : bTier === 3 ? 3 : 5
-              if (goldAmt > 0) {
-                this.gold += goldAmt
-                this.particles.push({
-                  x: b.x + b.w / 2, y: bsy + b.h / 2,
-                  vx: (Math.random() - 0.5) * 40,
-                  vy: -80 - Math.random() * 30,
-                  char: `+${goldAmt} ◆`, life: 0.8, maxLife: 0.8,
-                  color: '#fbbf24', size: 16,
-                })
-              }
-            }
+      const pops = updateIslandGroups(this.islandGroups, this.bricks, dt, this.bricksScrollY)
+      for (const pop of pops) {
+        for (const b of pop.bricks) {
+          const bonus = Math.round(b.points * pop.bricks.length)
+          this.score += bonus
+          this.wordsBroken++
+          this.multiplier = Math.min(10.0, this.multiplier + 0.3)
+          this.levelWords.push({ word: b.word, color: b.color, points: bonus })
+          if (this.charge < 1.0) this.charge = Math.min(1.0, this.charge + 0.067)
+          for (const ch of b.word.toUpperCase()) {
+            if (ch >= 'A' && ch <= 'Z') this.letterCounts[ch] = (this.letterCounts[ch] || 0) + 1
           }
-          // Popup label: "BREAK-OFF" for 1, "BREAK-OFF x3" etc. for multiples
-          const label = groupSize > 1
-            ? `BREAK-OFF x${groupSize} +${totalBonus}`
-            : `BREAK-OFF +${totalBonus}`
-          const fullElapsed = grp.initTimer
-          const popCy = grp.cy0 + grp.vy * fullElapsed - this.bricksScrollY
-          this.particles.push({
-            x: grp.cx0 + grp.vx * fullElapsed, y: popCy,
-            vx: 0, vy: -50,
-            char: label,
-            life: 1.5, maxLife: 1.5,
-            color: '#fff', size: 14,
-          })
-          this.islandGroups.delete(groupId)
+          const bsy = b.y - this.bricksScrollY
+          for (let i = 0; i < b.word.length; i++) {
+            this.particles.push({
+              x: b.x + (i / b.word.length) * b.w + 8, y: bsy + b.h / 2,
+              vx: (Math.random() - 0.5) * 300, vy: (Math.random() - 0.5) * 300,
+              char: b.word[i], life: 1.0, maxLife: 1.2, color: b.color, size: 16,
+            })
+          }
+          const bTier = colorTier(b.color)
+          const goldAmt = bTier <= 0 ? 0 : bTier === 1 ? 2 : bTier === 2 ? 3 : bTier === 3 ? 5 : 8
+          if (goldAmt > 0) {
+            this.gold += goldAmt
+            this.particles.push({
+              x: b.x + b.w / 2, y: bsy + b.h / 2,
+              vx: (Math.random() - 0.5) * 40, vy: -80 - Math.random() * 30,
+              char: `+${goldAmt} ◆`, life: 0.8, maxLife: 0.8, color: '#fbbf24', size: 16,
+            })
+          }
         }
+        this.particles.push({
+          x: pop.popX, y: pop.popY, vx: 0, vy: -50,
+          char: pop.label, life: 1.5, maxLife: 1.5, color: '#fff', size: 14,
+        })
       }
 
       // Level clear: all words placed and all bricks broken
       if (this.levelState === 'playing' && this.wordCursor >= this.wordsInParagraph.length && !this.bricks.some(b => b.alive)) {
-        this.startEndSequence()
+        if (this.tutorial) {
+          this.handleTutorialLevelClear()
+        } else {
+          this.startEndSequence()
+        }
       }
 
       // Gray cleanup: all colored bricks broken, only grays remain — auto-pop them
       if (this.levelState === 'playing' && this.wordCursor >= this.wordsInParagraph.length) {
         const allAlive = this.bricks.filter(b => b.alive)
-        if (allAlive.length > 0 && allAlive.every(b => b.color === TAG_COLORS.stopword)) {
+        if (allAlive.length > 0 && allAlive.every(b => b.color === TAG_COLORS.stopword || b.color === PUNCTUATION_COLOR || b.word === '')) {
           // Cancel any floating break-off islands — we're cleaning up everything
           this.islandGroups.clear()
           for (const b of allAlive) {
@@ -1086,7 +1172,8 @@ export class Game {
       }
 
       // Bricks reached the top wall → end sequence with remaining bricks
-      if (this.levelState === 'playing') {
+      // Tutorial: skip this check (short phases, no pressure needed)
+      if (this.levelState === 'playing' && !this.tutorial) {
         for (const b of this.bricks) {
           if (b.alive && b.breakOff <= 0 && b.y - this.bricksScrollY < 5) {
             this.startEndSequence()
@@ -1113,14 +1200,60 @@ export class Game {
       safetyHits: this.safetyHits,
       paddleVy: this.paddleVy,
       slamWallTimer: this.slamWallTimer,
+      slamActive: this.slamActive,
       ballSpeed: this.ballSpeed,
       bricksScrollY: this.bricksScrollY,
+      magnetCharges: this.magnetCharges,
+      backWallActive: this.backWallActive,
     }
+    // Homing steering — curve in-flight balls toward nearest brick
+    this._homingDbg = (this._homingDbg ?? 0) + dt
+    for (const ball of this.balls) {
+      if (ball.stuck || ball.homingLeft <= 0) continue
+      // Cooldown: free movement after a hit before re-engaging
+      if (ball.homingCooldown > 0) {
+        ball.homingCooldown -= dt
+        continue
+      }
+      const target = this.findHomingTarget(ball)
+      if (!target) { if (this._homingDbg > 1) console.log('[HOMING] no target found, bricks:', this.bricks.filter(b=>b.alive).length); continue }
+      const bsy = target.y - this.bricksScrollY
+      const tx = target.x + target.w / 2
+      const ty = bsy + target.h / 2
+      const dx = tx - ball.x
+      const dy = ty - ball.y
+      const dist = Math.sqrt(dx * dx + dy * dy)
+      if (dist < 1) continue
+      const speed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy)
+      // Desired direction toward target
+      const desiredVx = (dx / dist) * speed
+      const desiredVy = (dy / dist) * speed
+      // Steer: blend current velocity toward desired (turn rate per second)
+      const turnRate = 12.0 * dt  // aggressive arc — must be visibly obvious
+      ball.vx += (desiredVx - ball.vx) * Math.min(1, turnRate)
+      ball.vy += (desiredVy - ball.vy) * Math.min(1, turnRate)
+      // Normalize to preserve speed
+      const newSpeed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy)
+      if (newSpeed > 0) {
+        ball.vx = (ball.vx / newSpeed) * speed
+        ball.vy = (ball.vy / newSpeed) * speed
+      }
+      if (this._homingDbg > 1) {
+        console.log(`[HOMING] steering: charges=${ball.homingLeft} dist=${dist.toFixed(0)} target="${target.word}" speed=${speed.toFixed(0)}`)
+        this._homingDbg = 0
+      }
+    }
+
     const physicsEvents = updateBalls(this.balls, this.bricks, dt, physicsState)
     for (const ev of physicsEvents) {
       if (ev.type === 'brickHit') {
         this.brickHitThisLevel = true
         this.hitBrick(ev.brick, ev.ball)
+        // Homing: consume one charge, brief free-fly before curving to next target
+        if (ev.ball.homingLeft > 0) {
+          ev.ball.homingLeft--
+          if (ev.ball.homingLeft > 0) ev.ball.homingCooldown = 0.25  // 250ms free movement
+        }
         if (this.charge < 1.0) {
           this.charge = Math.min(1.0, this.charge + 0.067)
         }
@@ -1135,19 +1268,24 @@ export class Game {
         })
       } else if (ev.type === 'backWallHit') {
         this.particles.push(ev.particle)
+      } else if (ev.type === 'magnetCatch') {
+        this.magnetCharges--
       } else if (ev.type === 'safetyHit') {
         this.safetyHits--
         this.measureSafety()
       } else if (ev.type === 'ballLost') {
         // Remove the lost ball
         if (ev.index >= 0) this.balls.splice(ev.index, 1)
-        // If no active balls remain, lose a life and respawn one
+        // If no balls remain at all (active or magnet-stuck), lose a life
         const activeBalls = this.balls.filter(b => !b.stuck)
-        if (activeBalls.length === 0) {
+        const stuckBalls = this.balls.filter(b => b.stuck)
+        if (activeBalls.length === 0 && stuckBalls.length === 0) {
           this.multiplier = 1.0
-          this.lives--
-          this.levelLivesLost++
-          if (this.lives <= 0) {
+          if (!this.tutorial) {
+            this.lives--
+            this.levelLivesLost++
+          }
+          if (this.lives <= 0 && !this.tutorial) {
             this.startEndSequence()
           } else {
             // Reset all upgrades back to default on life loss
@@ -1159,14 +1297,16 @@ export class Game {
             this.freezeTimer = 0
             this.charge = 0
             this.dropBonus = 0
+            this.magnetCharges = 0
             // Respawn a single ball stuck to paddle (no upgrades)
+            this.ballSizeBonus = 0
             this.balls = [{
               x: this.paddleX + this.paddleW / 2,
               y: this.paddleY + this.paddleH + 9,
-              vx: 0, vy: 0, r: 7,
+              vx: 0, vy: 0, r: this.ballR,
               trail: [], stuck: true,
               backWallHits: 0, slamStacks: 0,
-              blastCharge: 0, pierceLeft: 0,
+              blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, homingLeft: 0, homingCooldown: 0,
             }]
           }
         }
@@ -1219,7 +1359,7 @@ export class Game {
             x: s.x, y: s.y, vx: 0, vy: 0, r: 3,
             trail: [], stuck: false,
             backWallHits: 0, slamStacks: 0,
-            blastCharge: 0, pierceLeft: 0,
+            blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, homingLeft: 0, homingCooldown: 0,
           }
           this.hitBrick(brick, dummyBall)
           // Spark on impact
@@ -1311,6 +1451,44 @@ export class Game {
     }
   }
 
+  /** Handle tutorial level clear — shared by normal clear and gray cleanup paths */
+  private handleTutorialLevelClear() {
+    if (!this.tutorial || this.tutorial.isTransitioning) return
+    const action = this.tutorial.handleLevelClear(this.pickups.length > 0)
+    if (action === 'shop') {
+      this.tutorial.advancePhase()
+      this.paragraphsCompleted++
+      this.openShop()
+    } else if (action === 'pause') {
+      for (const ball of this.balls) { ball.stuck = true; ball.trail = [] }
+      this.tutorial.startPause()
+    } else if (action === 'endSequence') {
+      this.startEndSequence()
+    } else if (action === 'wait') {
+      for (const ball of this.balls) { ball.stuck = true; ball.trail = [] }
+    }
+  }
+
+  /** Run pickup + paddle physics only (used during tutorial transitions) */
+  private tickPickupsOnly(dt: number) {
+    for (let i = this.pickups.length - 1; i >= 0; i--) {
+      const p = this.pickups[i]
+      p.y += p.vy * dt
+      p.wobblePhase += dt * 5
+      p.x += Math.sin(p.wobblePhase) * 30 * dt
+      if (p.y - 10 <= this.paddleY + this.paddleH && p.y + 10 >= this.paddleY &&
+          p.x >= this.paddleX && p.x <= this.paddleX + this.paddleW) {
+        this.activateUpgrade(p)
+        this.pickups.splice(i, 1)
+        continue
+      }
+      if (p.y < -30) this.pickups.splice(i, 1)
+    }
+    if (this.mouseX >= 0) this.paddleTargetX = this.mouseX - this.paddleW / 2
+    this.paddleTargetX = Math.max(0, Math.min(this.W - this.paddleW, this.paddleTargetX))
+    this.paddleX += (this.paddleTargetX - this.paddleX) * Math.min(1, dt * 22.5)
+  }
+
   private tickParticlesAndFade(dt: number) {
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const p = this.particles[i]
@@ -1328,106 +1506,11 @@ export class Game {
     }
   }
 
-  private detectIslands() {
-    const alive = this.bricks.filter(b => b.alive && b.breakOff === 0)
-    if (alive.length === 0) return
-
-    // Adjacency: two bricks are neighbors if close in Y (within row gap) and overlapping in X
-    const rowGap = 45  // must exceed rowH + gapY (29 + 6 = 35) with margin for float rounding
-    const xTolerance = 4
-
-    // Union-find
-    const parent = new Map<Brick, Brick>()
-    const find = (b: Brick): Brick => {
-      let r = b
-      while (parent.get(r) !== r) r = parent.get(r)!
-      let c = b
-      while (c !== r) { const n = parent.get(c)!; parent.set(c, r); c = n }
-      return r
-    }
-    const union = (a: Brick, b: Brick) => {
-      const ra = find(a), rb = find(b)
-      if (ra !== rb) parent.set(ra, rb)
-    }
-
-    for (const b of alive) parent.set(b, b)
-
-    for (let i = 0; i < alive.length; i++) {
-      for (let j = i + 1; j < alive.length; j++) {
-        const a = alive[i], b = alive[j]
-        const dy = Math.abs(a.y - b.y)
-        if (dy > rowGap) continue
-        // X overlap check
-        if (a.x + a.w + xTolerance >= b.x && b.x + b.w + xTolerance >= a.x) {
-          union(a, b)
-        }
-      }
-    }
-
-    // Group by root
-    const groups = new Map<Brick, Brick[]>()
-    for (const b of alive) {
-      const root = find(b)
-      if (!groups.has(root)) groups.set(root, [])
-      groups.get(root)!.push(b)
-    }
-
-    // If there's only 1 group, it's only an island if bricks have been broken
-    // (i.e. it's a remnant, not the full intact paragraph)
-    const totalPlaced = this.bricks.length
-    const totalAliveIncBreakOff = this.bricks.filter(b => b.alive).length
-    if (groups.size <= 1 && totalAliveIncBreakOff === totalPlaced) return  // full intact paragraph
-
-    // Find the largest group (main body) — but only treat it as "main" if it's
-    // strictly larger than the others. If all groups are the same size, they all break off.
-    let mainGroup: Brick[] | null = null
-    let maxLen = 0
-    let secondMaxLen = 0
-    for (const g of groups.values()) {
-      if (g.length > maxLen) {
-        secondMaxLen = maxLen
-        maxLen = g.length
-        mainGroup = g
-      } else if (g.length > secondMaxLen) {
-        secondMaxLen = g.length
-      }
-    }
-    // If the "largest" is the same size as the runner-up, there's no main body — all break off
-    if (maxLen === secondMaxLen) mainGroup = null
-
-    // All other groups are islands — flag them for break-off as unified icebergs
-    // Cap at 4 bricks: larger chunks just keep floating, no free break-off bonus
-    const mainSet = mainGroup ? new Set(mainGroup) : new Set<Brick>()
-    for (const g of groups.values()) {
-      if (g === mainGroup) continue
-      if (g.length > 3) continue  // too big — stays as normal bricks
-
-      // Compute group centroid
-      let cx = 0, cy = 0
-      for (const b of g) { cx += b.x + b.w / 2; cy += b.y + b.h / 2 }
-      cx /= g.length; cy /= g.length
-
-      // Shared group properties — drift upward a touch faster than normal scroll,
-      // gentle rotation matched to drift speed so it looks natural
-      const groupId = this.nextIslandId++
-      const timer = 1.2 + Math.random() * 0.4  // 1.2–1.6s until pop (longer for drama)
-      const vx = (Math.random() - 0.5) * 10     // very slight lateral drift
-      const vy = -(this.bricksDriftSpeed * 0.4 + Math.random() * 4)  // just a bit faster than normal scroll
-      const rotSpeed = (Math.random() > 0.5 ? 1 : -1) * (0.08 + Math.random() * 0.12)  // subtle rotation ~0.08–0.2 rad/s
-
-      this.islandGroups.set(groupId, {
-        cx0: cx, cy0: cy, vx, vy, rotSpeed, angle: 0, timer, initTimer: timer,
-      })
-
-      for (const b of g) {
-        if (mainSet.has(b)) continue
-        b.breakOff = timer
-        b.breakOffVx = 0  // unused now, group handles movement
-        b.breakOffAngle = 0
-        b.breakOffGroupId = groupId
-        b.breakOffOrigX = b.x
-        b.breakOffOrigY = b.y
-      }
+  private runIslandDetection() {
+    const result = detectIslands(this.bricks, this.bricks.length, this.bricksDriftSpeed, this.nextIslandId)
+    this.nextIslandId = result.nextIslandId
+    for (const [id, grp] of result.newGroups) {
+      this.islandGroups.set(id, grp)
     }
   }
 
@@ -1442,8 +1525,9 @@ export class Game {
     this.endGrade = ''
     this.endTimer = 0
     this.endTotalWords = this.totalWordsInParagraph
-    // Broken = words placed as bricks minus those still alive
-    this.endBrokenWords = this.wordCursor - this.endPopBricks.length
+    // Broken = words placed as bricks (excluding PARA_BREAK sentinels) minus those still alive
+    const paraBreaks = this.wordsInParagraph.slice(0, this.wordCursor).filter(w => w === Game.PARA_BREAK).length
+    this.endBrokenWords = (this.wordCursor - paraBreaks) - this.endPopBricks.length
     // Always start with endPopping phase (gives time to see final explosions)
     this.levelState = 'endPopping'
     for (const ball of this.balls) { ball.stuck = true; ball.trail = [] }
@@ -1454,13 +1538,15 @@ export class Game {
       // Chapter exhausted — wait for all bricks to be cleared
       return
     }
-    this.spawnBrickRows(4)
+    this.spawnBrickRows(12)
   }
 
   private restart() {
-    Game.clearSave()
+    clearSave()
     this.gameOver = false
     this.started = false
+    this.backWallActive = false
+    this.backWallReveal = 0
     this.score = 0
     this.multiplier = 1.0
     this.wordsBroken = 0
@@ -1475,6 +1561,8 @@ export class Game {
     this.charge = 0
     this.gold = 0
     this.dropBonus = 0
+    this.ballSizeBonus = 0
+    this.magnetCharges = 0
     this.paragraphsCompleted = 0
     this.bricksDriftSpeed = this.baseDriftSpeed
     this.paddleText = 'BOOK BREAKER'
@@ -1501,7 +1589,7 @@ export class Game {
   // ── Shop ──────────────────────────────────────────────────────
   private openShop() {
     this.levelState = 'shop'
-    this.shopItems = this.generateShopItems()
+    this.shopItems = generateShopItems(this.shopMaxedState())
 
     // Responsive grid: 2 cols × 3 rows on mobile, 3 cols × 2 rows on desktop
     const narrow = this.W < 700
@@ -1538,41 +1626,11 @@ export class Game {
       w: btnW,
       h: 44,
     }
-    Game.saveToStorage(this)
+    if (!this.tutorial) saveToStorage(this.getSaveState())
   }
 
-  private isShopItemMaxed(id: string): boolean {
-    if (id === 'widen1' || id === 'widen2') return this.widenLevel >= MAX_WIDEN
-    if (id === 'safety2' || id === 'safety4') return this.safetyHits >= MAX_SAFETY
-    return false
-  }
-
-  private generateShopItems(): ShopItem[] {
-    const lifeOpts = SHOP_POOL.filter(s => s.isLife)
-    const others = SHOP_POOL.filter(s => !s.isLife && !this.isShopItemMaxed(s.id))
-    const picked: ShopItem[] = []
-
-    const toShopItem = (entry: ShopPoolEntry, maxed = false): ShopItem => {
-      const rarity = rollRarity()
-      return {
-        id: entry.id,
-        name: entry.name,
-        desc: entry.desc,
-        price: Math.round(entry.basePrice * RARITY_PRICE[rarity]),
-        rarity,
-        bought: maxed,
-        maxed,
-      }
-    }
-
-    // 1 guaranteed life option
-    picked.push(toShopItem(lifeOpts[Math.floor(Math.random() * lifeOpts.length)]))
-    // 5 from the rest (shuffled, excluding maxed items)
-    const shuffled = others.slice().sort(() => Math.random() - 0.5)
-    for (let i = 0; i < 5 && i < shuffled.length; i++) {
-      picked.push(toShopItem(shuffled[i]))
-    }
-    return picked.sort(() => Math.random() - 0.5)
+  private shopMaxedState() {
+    return { widenLevel: this.widenLevel, safetyHits: this.safetyHits, ballSizeBonus: this.ballSizeBonus, maxWiden: MAX_WIDEN, maxSafety: MAX_SAFETY }
   }
 
   private handleShopClick(vx: number, vy: number) {
@@ -1592,54 +1650,68 @@ export class Game {
   }
 
   private closeShopAndAdvance() {
-    // Snapshot what was purchased before advanceLevel resets anything
-    const boughtItems = this.shopItems.filter(it => it.bought).map(it => it.id)
+    // Snapshot purchased items before advanceLevel resets anything
+    const bought = this.shopItems.filter(it => it.bought)
     this.levelState = 'playing'
     this.levelWords = []
     this.advanceLevel()
     // Reapply upgrade purchases that advanceLevel may have wiped (chapter reset)
-    for (const id of boughtItems) {
-      if (id === 'widen1') {
-        this.widenLevel = Math.max(this.widenLevel, 1)
-        const equals = '═'.repeat(this.widenLevel)
-        this.paddleText = `${equals} BOOK BREAKER ${equals}`
-        this.measurePaddle()
-      } else if (id === 'widen2') {
-        this.widenLevel = Math.max(this.widenLevel, 2)
-        const equals = '═'.repeat(this.widenLevel)
-        this.paddleText = `${equals} BOOK BREAKER ${equals}`
-        this.measurePaddle()
-      } else if (id === 'multi' && this.balls.length < 3) {
-        while (this.balls.length < 3) {
-          this.balls.push({
-            x: this.paddleX + this.paddleW / 2 + (this.balls.length % 2 === 0 ? -12 : 12),
-            y: this.paddleY + this.paddleH + 9,
-            vx: 0, vy: 0, r: 7,
-            trail: [], stuck: true,
-            backWallHits: 0, slamStacks: 0,
-            blastCharge: 0, pierceLeft: 0,
-          })
-        }
-      } else if (id === 'safety2') {
-        if (this.safetyHits < 2) {
-          const wasFresh = this.safetyHits === 0
-          this.safetyHits = Math.max(this.safetyHits, 2)
-          this.measureSafety()
-          if (wasFresh) this.safetyX = this.W / 2 - this.safetyW / 2
-        }
-      } else if (id === 'safety4') {
-        if (this.safetyHits < 4) {
-          const wasFresh = this.safetyHits === 0
-          this.safetyHits = Math.max(this.safetyHits, 4)
-          this.measureSafety()
-          if (wasFresh) this.safetyX = this.W / 2 - this.safetyW / 2
-        }
-      } else if (id === 'blast') {
-        for (const ball of this.balls) ball.blastCharge = Math.max(ball.blastCharge, 2)
-      } else if (id === 'pierce') {
-        for (const ball of this.balls) ball.pierceLeft = Math.max(ball.pierceLeft, 3)
+    // Life purchases already applied and survive advanceLevel
+    for (const item of bought) {
+      if (item.id === 'life') continue  // already applied
+      this.applyShopPurchase(item.id, item.tier)
+    }
+  }
+
+  /** Apply a shop purchase effect. tier = 1-4 (common-epic), determines strength. */
+  private applyShopPurchase(id: string, tier: number) {
+    const LIFE_AMOUNTS = [0, 1, 2, 3, 5]
+    const WIDEN_AMOUNTS = [0, 1, 2, 3, 4]
+    const SAFETY_AMOUNTS = [0, 1, 2, 3, 4]
+    const BLAST_TIERS = [0, 1, 2, 3, 4]
+    const PIERCE_AMOUNTS = [0, 3, 6, 9, 12]
+    const LUCKY_AMOUNTS = [0, 0.01, 0.02, 0.03, 0.05]
+    const BIGBALL_AMOUNTS = [0, 0.2, 0.4, 0.6, 0.8]
+    const MAGNET_AMOUNTS = [0, 4, 6, 8, 12]
+    const HOMING_AMOUNTS = [0, 4, 6, 8, 12]
+
+    if (id === 'life') {
+      this.lives += LIFE_AMOUNTS[tier]
+    } else if (id === 'widen') {
+      this.widenLevel = Math.min(MAX_WIDEN, this.widenLevel + WIDEN_AMOUNTS[tier])
+      const equals = '═'.repeat(this.widenLevel)
+      this.paddleText = `${equals} BOOK BREAKER ${equals}`
+      this.measurePaddle()
+    } else if (id === 'multi') {
+      while (this.balls.length < 3) {
+        this.balls.push({
+          x: this.paddleX + this.paddleW / 2 + (this.balls.length % 2 === 0 ? -12 : 12),
+          y: this.paddleY + this.paddleH + 9,
+          vx: 0, vy: 0, r: this.ballR,
+          trail: [], stuck: true,
+          backWallHits: 0, slamStacks: 0,
+          blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, homingLeft: 0, homingCooldown: 0,
+        })
       }
-      // life1, life3, score: already applied and survive advanceLevel
+    } else if (id === 'safety') {
+      const wasFresh = this.safetyHits === 0
+      this.safetyHits = Math.min(MAX_SAFETY, this.safetyHits + SAFETY_AMOUNTS[tier])
+      this.measureSafety()
+      if (wasFresh) this.safetyX = this.W / 2 - this.safetyW / 2
+    } else if (id === 'blast') {
+      for (const ball of this.balls) ball.blastCharge = Math.max(ball.blastCharge, BLAST_TIERS[tier])
+    } else if (id === 'pierce') {
+      for (const ball of this.balls) ball.pierceLeft = Math.max(ball.pierceLeft, PIERCE_AMOUNTS[tier])
+    } else if (id === 'lucky') {
+      this.dropBonus += LUCKY_AMOUNTS[tier]
+    } else if (id === 'bigball') {
+      this.ballSizeBonus = Math.min(1.0, this.ballSizeBonus + BIGBALL_AMOUNTS[tier])
+      this.applyBallSize()
+    } else if (id === 'magnet') {
+      this.magnetCharges += MAGNET_AMOUNTS[tier]
+    } else if (id === 'homing') {
+      for (const ball of this.balls) ball.homingLeft += HOMING_AMOUNTS[tier]
+      console.log(`[HOMING] shop applied: +${HOMING_AMOUNTS[tier]} shots, balls now:`, this.balls.map(b => b.homingLeft))
     }
   }
 
@@ -1650,52 +1722,7 @@ export class Game {
     item.bought = true
     this.gold -= item.price
 
-    if (item.id === 'life1') {
-      this.lives += 1
-    } else if (item.id === 'life3') {
-      this.lives += 3
-    } else if (item.id === 'widen1') {
-      this.widenLevel = Math.min(MAX_WIDEN, this.widenLevel + 1)
-      const equals = '═'.repeat(this.widenLevel)
-      this.paddleText = `${equals} BOOK BREAKER ${equals}`
-      this.measurePaddle()
-    } else if (item.id === 'widen2') {
-      this.widenLevel = Math.min(MAX_WIDEN, this.widenLevel + 2)
-      const equals = '═'.repeat(this.widenLevel)
-      this.paddleText = `${equals} BOOK BREAKER ${equals}`
-      this.measurePaddle()
-    } else if (item.id === 'multi') {
-      for (let i = 0; i < 2; i++) {
-        this.balls.push({
-          x: this.paddleX + this.paddleW / 2 + (i === 0 ? -12 : 12),
-          y: this.paddleY + this.paddleH + 9,
-          vx: 0, vy: 0, r: 7,
-          trail: [], stuck: true,
-          backWallHits: 0, slamStacks: 0,
-          blastCharge: 0, pierceLeft: 0,
-        })
-      }
-    } else if (item.id === 'safety2') {
-      const wasFresh = this.safetyHits === 0
-      this.safetyHits = Math.min(MAX_SAFETY, this.safetyHits + 2)
-      this.measureSafety()
-      if (wasFresh) this.safetyX = this.W / 2 - this.safetyW / 2
-    } else if (item.id === 'safety4') {
-      const wasFresh = this.safetyHits === 0
-      this.safetyHits = Math.min(MAX_SAFETY, this.safetyHits + 4)
-      this.measureSafety()
-      if (wasFresh) this.safetyX = this.W / 2 - this.safetyW / 2
-    } else if (item.id === 'blast') {
-      for (const ball of this.balls) {
-        ball.blastCharge = Math.max(ball.blastCharge, 2)
-      }
-    } else if (item.id === 'pierce') {
-      for (const ball of this.balls) {
-        ball.pierceLeft = Math.max(ball.pierceLeft, 3)
-      }
-    } else if (item.id === 'lucky') {
-      this.dropBonus += 0.02  // +2% flat, stacks permanently
-    }
+    this.applyShopPurchase(item.id, item.tier)
 
     // Purchase feedback particle
     const rect = this.shopRects[idx]
@@ -1712,17 +1739,24 @@ export class Game {
 
   private advanceLevel() {
     const chapter = this.book.chapters[this.chapterIdx]
-    const isNewChapter = this.paragraphIdx + 1 >= chapter.paragraphs.length
+    const nextPara = this.paragraphIdx + this.levelParagraphCount
+    const isNewChapter = nextPara >= chapter.paragraphs.length
     if (!isNewChapter) {
-      // Next paragraph in same chapter
-      this.loadParagraph(this.chapterIdx, this.paragraphIdx + 1)
+      // Next level in same chapter (skip past all paragraphs we just played)
+      this.loadParagraph(this.chapterIdx, nextPara)
     } else {
       // Next chapter, first paragraph
-      this.chapterIdx = (this.chapterIdx + 1) % this.book.chapters.length
+      const nextIdx = this.chapterIdx + 1
+      if (nextIdx >= this.book.chapters.length) {
+        markBookBeaten(this.book.title)
+      }
+      this.chapterIdx = nextIdx % this.book.chapters.length
       this.loadParagraph(this.chapterIdx, 0)
     }
     // Wait for ball launch before scrolling
     this.started = false
+    this.backWallActive = false
+    this.backWallReveal = 0
     this.levelLivesLost = 0
     this.freezeTimer = 0
     this.bricksDriftSpeed = this.baseDriftSpeed
@@ -1737,16 +1771,18 @@ export class Game {
       this.widenLevel = 0
       this.safetyHits = 0
       this.charge = 0
+      this.ballSizeBonus = 0
+      this.magnetCharges = 0
       this.paddleText = 'BOOK BREAKER'
       this.measurePaddle()
       // Reset to single ball
       this.balls = [{
         x: this.paddleX + this.paddleW / 2,
         y: this.paddleY + this.paddleH + 9,
-        vx: 0, vy: 0, r: 7,
+        vx: 0, vy: 0, r: this.ballR,
         trail: [], stuck: true,
         backWallHits: 0, slamStacks: 0,
-        blastCharge: 0, pierceLeft: 0,
+        blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, homingLeft: 0, homingCooldown: 0,
       }]
     } else {
       // Same chapter — carry over charge, multiball, pierce, blast, widen, safety
@@ -1758,7 +1794,7 @@ export class Game {
         ball.slamStacks = 0
       }
     }
-    Game.saveToStorage(this)
+    if (!this.tutorial) saveToStorage(this.getSaveState())
   }
 
   private activateUpgrade(pickup: Pickup) {
@@ -1778,13 +1814,21 @@ export class Game {
       } else if (ev.type === 'clampPaddle') {
         this.paddleX = Math.min(this.paddleX, this.W - this.paddleW)
         this.paddleTargetX = Math.min(this.paddleTargetX, this.W - this.paddleW)
+      } else if (ev.type === 'applyBallSize') {
+        this.applyBallSize()
       }
     }
   }
 
   private hitBrick(brick: Brick, ball: Ball) {
     const uState = this.getUpgradeState()
+    // Tutorial: force upgrade drops during forceDrops phases
+    const savedDropBonus = uState.dropBonus
+    if (this.tutorial?.forceDrops) uState.dropBonus = 1.0
+    // Tutorial: suppress drops when drops aren't enabled yet
+    if (this.tutorial && !this.tutorial.dropsEnabled) uState.dropBonus = -1.0
     runHitBrick(brick, ball, uState)
+    uState.dropBonus = savedDropBonus
     this.applyUpgradeState(uState)
   }
 
@@ -1816,6 +1860,8 @@ export class Game {
       levelWords: this.levelWords,
       gold: this.gold,
       dropBonus: this.dropBonus,
+      ballSizeBonus: this.ballSizeBonus,
+      magnetCharges: this.magnetCharges,
       maxWiden: MAX_WIDEN,
       maxSafety: MAX_SAFETY,
     }
@@ -1832,6 +1878,8 @@ export class Game {
     this.lives = uState.lives
     this.gold = uState.gold
     this.dropBonus = uState.dropBonus
+    this.ballSizeBonus = uState.ballSizeBonus
+    this.magnetCharges = uState.magnetCharges
   }
 
   private updateSidebar() {
@@ -1856,10 +1904,11 @@ export class Game {
     sidebarEls.combo.textContent = comboStr
     sidebarEls.words.textContent = wordsStr
     const chapter = this.book.chapters[this.chapterIdx]
-    sidebarEls.chapterLabel.textContent = `Ch ${this.chapterIdx + 1}  ·  ${this.paragraphIdx + 1}/${chapter.paragraphs.length}`
+    const lastPara = Math.min(this.paragraphIdx + this.levelParagraphCount, chapter.paragraphs.length)
+    sidebarEls.chapterLabel.textContent = `Ch ${this.chapterIdx + 1}  ·  P${this.paragraphIdx + 1}-${lastPara}/${chapter.paragraphs.length}`
     const bricksAlive = this.bricks.filter(b => b.alive).length
-    const wordsPlaced = this.wordCursor
-    const broken = wordsPlaced - bricksAlive
+    const paraBreaks = this.wordsInParagraph.slice(0, this.wordCursor).filter(w => w === Game.PARA_BREAK).length
+    const broken = (this.wordCursor - paraBreaks) - bricksAlive
     const pct = this.totalWordsInParagraph > 0 ? Math.round((broken / this.totalWordsInParagraph) * 100) : 0
     sidebarEls.progressBar.style.width = `${pct}%`
     sidebarEls.progressText.textContent = `${pct}%`
@@ -1922,6 +1971,8 @@ export class Game {
       levelState: this.levelState,
       gold: this.gold,
       ballSpeed: this.ballSpeed,
+      magnetCharges: this.magnetCharges,
+      backWallReveal: this.backWallReveal,
     }
     renderGame(ctx, W, H, renderState)
 
@@ -1954,8 +2005,8 @@ export class Game {
       ctx.fillStyle = '#e8c44a'
       ctx.font = `bold 22px 'JetBrains Mono', monospace`
       const chapter = this.book.chapters[this.chapterIdx]
-      const isChapterDone = this.paragraphIdx + 1 >= chapter.paragraphs.length
-      ctx.fillText(isChapterDone ? 'CHAPTER COMPLETE' : 'PARAGRAPH COMPLETE', W / 2, H * 0.28)
+      const isChapterDone = this.paragraphIdx + this.levelParagraphCount >= chapter.paragraphs.length
+      ctx.fillText(isChapterDone ? 'CHAPTER COMPLETE' : 'LEVEL COMPLETE', W / 2, H * 0.28)
 
       // Scrolling word tally — show last few words rapidly
       ctx.font = `13px 'JetBrains Mono', monospace`
@@ -2044,7 +2095,7 @@ export class Game {
       // Prompt
       if (this.endTimer > 1.0) {
         const isFail = isDead || this.endGrade === 'D' || this.endGrade === 'F'
-        const isShopNext = !isFail && (this.paragraphsCompleted + 1) % 3 === 0
+        const isShopNext = !isFail  // shop after every level now
         const action = this.isMobile ? 'TAP' : 'CLICK or SPACE'
         let prompt: string
         if (isDead) prompt = `[ ${action} to continue ]`
@@ -2059,185 +2110,37 @@ export class Game {
 
     // Shop overlay
     if (this.levelState === 'shop' && this.shopRects.length > 0) {
-      const blur = this.isMobile ? 0.35 : 1
-      const narrow = this.W < 700
-
-      // Dark backdrop
-      ctx.fillStyle = 'rgba(6, 8, 12, 0.92)'
-      ctx.fillRect(0, 0, W, H)
-
-      // ── Bordered panel around entire shop ──
-      const firstR = this.shopRects[0]
-      const lastR = this.shopRects[this.shopRects.length - 1]
-      const panelPad = narrow ? 16 : 24
-      const panelX = firstR.x - panelPad
-      const panelY = firstR.y - (narrow ? 100 : 120)
-      const panelRight = lastR.x + lastR.w + panelPad
-      const panelBottom = this.shopContinueRect.y + this.shopContinueRect.h + panelPad
-      const panelW = panelRight - panelX
-      const panelH = panelBottom - panelY
-
-      ctx.fillStyle = '#0a0e14'
-      ctx.strokeStyle = '#1a2030'
-      ctx.lineWidth = 2
-      roundRect(ctx, panelX, panelY, panelW, panelH, 8)
-      ctx.fill()
-      ctx.stroke()
-
-      // Gold accent line at top of panel
-      ctx.strokeStyle = '#e8c44a'
-      ctx.lineWidth = 2
-      ctx.beginPath()
-      ctx.moveTo(panelX + 8, panelY)
-      ctx.lineTo(panelRight - 8, panelY)
-      ctx.stroke()
-
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-
-      // ── Title ──
-      const titleY = firstR.y - (narrow ? 78 : 96)
-      ctx.fillStyle = '#e8c44a'
-      ctx.shadowColor = '#e8c44a'
-      ctx.shadowBlur = 18 * blur
-      ctx.font = `bold ${narrow ? 22 : 28}px 'JetBrains Mono', monospace`
-      ctx.fillText('◆  SHOP  ◆', W / 2, titleY)
-      ctx.shadowBlur = 0
-
-      // ── Gold display ──
-      const goldY = firstR.y - (narrow ? 48 : 58)
-      ctx.fillStyle = '#fbbf24'
-      ctx.shadowColor = '#fbbf24'
-      ctx.shadowBlur = 6 * blur
-      ctx.font = `bold ${narrow ? 16 : 20}px 'JetBrains Mono', monospace`
-      ctx.fillText(`◆ ${this.gold}`, W / 2, goldY)
-      ctx.shadowBlur = 0
-
-      // ── Hint ──
-      const hintY = firstR.y - (narrow ? 22 : 28)
-      ctx.fillStyle = '#374151'
-      ctx.font = `${narrow ? 9 : 11}px 'JetBrains Mono', monospace`
-      ctx.fillText(narrow ? 'tap to buy · tap CONTINUE to skip' : 'click to purchase  ·  SPACE to continue', W / 2, hintY)
-
-      // ── Item cards (text-only, rarity-colored) ──
-      for (let i = 0; i < this.shopItems.length && i < this.shopRects.length; i++) {
-        const item = this.shopItems[i]
-        const r = this.shopRects[i]
-        const canAfford = this.gold >= item.price
-        const dimmed = item.bought || item.maxed || !canAfford
-        const rarityColor = RARITY_COLORS[item.rarity]
-
-        // Card background
-        ctx.fillStyle = item.bought ? '#080a10' : '#0c1018'
-        roundRect(ctx, r.x, r.y, r.w, r.h, 5)
-        ctx.fill()
-
-        // Border — color from rarity, glow when affordable
-        if (!item.bought && canAfford) {
-          ctx.shadowColor = rarityColor
-          ctx.shadowBlur = 8 * blur
-        }
-        ctx.strokeStyle = item.bought ? '#1a2030' : (canAfford ? rarityColor : '#1f1215')
-        ctx.lineWidth = item.bought ? 1 : 1.5
-        roundRect(ctx, r.x, r.y, r.w, r.h, 5)
-        ctx.stroke()
-        ctx.shadowBlur = 0
-
-        ctx.globalAlpha = dimmed ? 0.25 : 1.0
-
-        // Rarity label (top of card)
-        ctx.fillStyle = rarityColor
-        ctx.font = `bold ${narrow ? 8 : 9}px 'JetBrains Mono', monospace`
-        ctx.fillText(RARITY_LABELS[item.rarity], r.x + r.w / 2, r.y + r.h * 0.14)
-
-        // Thin rarity accent line under label
-        ctx.strokeStyle = rarityColor
-        ctx.globalAlpha = dimmed ? 0.1 : 0.35
-        ctx.lineWidth = 1
-        ctx.beginPath()
-        const lineInset = narrow ? 16 : 24
-        ctx.moveTo(r.x + lineInset, r.y + r.h * 0.22)
-        ctx.lineTo(r.x + r.w - lineInset, r.y + r.h * 0.22)
-        ctx.stroke()
-        ctx.globalAlpha = dimmed ? 0.25 : 1.0
-
-        // Name (main text, prominent)
-        ctx.fillStyle = '#e0e4ea'
-        ctx.font = `bold ${narrow ? 12 : 14}px 'JetBrains Mono', monospace`
-        ctx.fillText(item.name, r.x + r.w / 2, r.y + r.h * 0.42)
-
-        // Description
-        ctx.fillStyle = '#5a6578'
-        ctx.font = `${narrow ? 8 : 10}px 'JetBrains Mono', monospace`
-        ctx.fillText(item.desc, r.x + r.w / 2, r.y + r.h * 0.60)
-
-        // Price or SOLD/MAXED
-        if (item.maxed) {
-          ctx.fillStyle = '#5a6578'
-          ctx.font = `bold ${narrow ? 10 : 11}px 'JetBrains Mono', monospace`
-          ctx.fillText('── MAXED ──', r.x + r.w / 2, r.y + r.h * 0.82)
-        } else if (item.bought) {
-          ctx.fillStyle = '#374151'
-          ctx.font = `bold ${narrow ? 10 : 11}px 'JetBrains Mono', monospace`
-          ctx.fillText('── SOLD ──', r.x + r.w / 2, r.y + r.h * 0.82)
-        } else {
-          ctx.fillStyle = canAfford ? '#fbbf24' : '#f87171'
-          ctx.font = `bold ${narrow ? 12 : 14}px 'JetBrains Mono', monospace`
-          ctx.fillText(`◆ ${item.price}`, r.x + r.w / 2, r.y + r.h * 0.82)
-        }
-
-        ctx.globalAlpha = 1.0
-      }
-
-      // ── Divider before continue ──
-      const divY = this.shopContinueRect.y - 10
-      ctx.strokeStyle = '#1a2030'
-      ctx.lineWidth = 1
-      ctx.beginPath()
-      ctx.moveTo(firstR.x, divY)
-      ctx.lineTo(lastR.x + lastR.w, divY)
-      ctx.stroke()
-
-      // ── Continue button ──
-      const cr = this.shopContinueRect
-      ctx.fillStyle = '#0c1018'
-      ctx.strokeStyle = '#5a6578'
-      ctx.lineWidth = 1.5
-      roundRect(ctx, cr.x, cr.y, cr.w, cr.h, 5)
-      ctx.fill()
-      ctx.stroke()
-
-      ctx.fillStyle = '#7dd3fc'
-      ctx.shadowColor = '#7dd3fc'
-      ctx.shadowBlur = 6 * blur
-      ctx.font = `bold ${narrow ? 13 : 16}px 'JetBrains Mono', monospace`
-      ctx.fillText('CONTINUE  ▶', W / 2, cr.y + cr.h / 2)
-      ctx.shadowBlur = 0
-
-      // ── Particles (purchase feedback) on top ──
-      for (const p of this.particles) {
-        const lifeRatio = p.life / p.maxLife
-        ctx.globalAlpha = lifeRatio
-        ctx.fillStyle = p.color
-        const fontSize = Math.round(p.size * (0.5 + lifeRatio * 0.5))
-        ctx.font = `bold ${fontSize}px 'JetBrains Mono', monospace`
-        ctx.textAlign = 'center'
-        ctx.textBaseline = 'middle'
-        ctx.fillText(p.char, p.x, p.y)
-      }
-      ctx.globalAlpha = 1.0
+      renderShop(ctx, W, H, {
+        shopItems: this.shopItems,
+        shopRects: this.shopRects,
+        shopContinueRect: this.shopContinueRect,
+        gold: this.gold,
+        particles: this.particles,
+        isMobile: this.isMobile,
+        W: this.W,
+      })
     }
 
-    // Game over overlay
+    // Game over / tutorial complete overlay
     if (this.gameOver) {
-      renderGameOver(ctx, W, H, {
-        book: this.book,
-        chapterIdx: this.chapterIdx,
-        score: this.score,
-        wordsBroken: this.wordsBroken,
-        isNewHigh: this.isNewHigh,
-        endScores: this.endScores,
-      })
+      if (this.tutorial) {
+        renderTutorialComplete(ctx, W, H, {
+          score: this.score,
+          wordsBroken: this.wordsBroken,
+          isNewHigh: this.isNewHigh,
+          endScores: this.endScores,
+          isMobile: this.isMobile,
+        })
+      } else {
+        renderGameOver(ctx, W, H, {
+          book: this.book,
+          chapterIdx: this.chapterIdx,
+          score: this.score,
+          wordsBroken: this.wordsBroken,
+          isNewHigh: this.isNewHigh,
+          endScores: this.endScores,
+        })
+      }
     }
 
     // Pause overlay
@@ -2250,7 +2153,7 @@ export class Game {
   // ── Save / Restore ───────────────────────────────────────────
   getSaveState() {
     return {
-      bookIdx: BOOKS.indexOf(this.book),
+      bookIdx: this._bookIdx,
       chapterIdx: this.chapterIdx,
       paragraphIdx: this.paragraphIdx,
       score: this.score,
@@ -2265,6 +2168,8 @@ export class Game {
       alphabetCompletions: this.alphabetCompletions,
       nextLifeScore: this.nextLifeScore,
       levelState: this.levelState,
+      ballSizeBonus: this.ballSizeBonus,
+      magnetCharges: this.magnetCharges,
     }
   }
 
@@ -2282,6 +2187,8 @@ export class Game {
     this.letterCounts = save.letterCounts
     this.alphabetCompletions = save.alphabetCompletions
     this.nextLifeScore = save.nextLifeScore
+    this.ballSizeBonus = save.ballSizeBonus ?? 0
+    this.magnetCharges = save.magnetCharges ?? 0
     // Restore paddle width
     if (this.widenLevel > 0) {
       const equals = '═'.repeat(this.widenLevel)
@@ -2303,19 +2210,7 @@ export class Game {
     this.updateSidebar()
   }
 
-  static saveToStorage(game: Game) {
-    const save = game.getSaveState()
-    localStorage.setItem('bb_run_save', JSON.stringify(save))
-  }
-
-  static loadFromStorage(): ReturnType<Game['getSaveState']> | null {
-    const raw = localStorage.getItem('bb_run_save')
-    if (!raw) return null
-    try { return JSON.parse(raw) } catch { return null }
-  }
-
-  static clearSave() {
-    localStorage.removeItem('bb_run_save')
-  }
+  static loadFromStorage = loadFromStorage
+  static clearSave = clearSave
 
 }

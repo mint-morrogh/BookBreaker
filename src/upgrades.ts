@@ -30,6 +30,8 @@ export interface UpgradeState {
   levelWords: { word: string; color: string; points: number }[]
   gold: number
   dropBonus: number   // flat % added to all upgrade drop chances (from shop)
+  ballSizeBonus: number  // 0-1.0 ball size multiplier
+  magnetCharges: number  // remaining magnet catches
   maxWiden: number
   maxSafety: number
 }
@@ -39,6 +41,7 @@ export type UpgradeEvent =
   | { type: 'measurePaddle'; paddleText: string }
   | { type: 'measureSafety' }
   | { type: 'clampPaddle' }
+  | { type: 'applyBallSize' }
 
 export function activateUpgrade(pickup: Pickup, state: UpgradeState): UpgradeEvent[] {
   const events: UpgradeEvent[] = []
@@ -51,6 +54,7 @@ export function activateUpgrade(pickup: Pickup, state: UpgradeState): UpgradeEve
     events.push({ type: 'measurePaddle', paddleText })
     events.push({ type: 'clampPaddle' })
   } else if (pickup.type === 'multiball') {
+    const ballR = 5.6 * (1 + state.ballSizeBonus)
     // Find a ball to split from — prefer active, fall back to stuck (held on paddle)
     const source = state.balls.find(b => !b.stuck) ?? state.balls.find(b => b.stuck)
     if (source) {
@@ -61,14 +65,14 @@ export function activateUpgrade(pickup: Pickup, state: UpgradeState): UpgradeEve
             x: source.x + (i === 0 ? -12 : 12),
             y: source.y,
             vx: 0, vy: 0,
-            r: 6,
+            r: ballR,
             trail: [],
             stuck: true,
 
             backWallHits: 0,
             slamStacks: 0,
             blastCharge: 0,
-            pierceLeft: 0,
+            pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, homingLeft: 0, homingCooldown: 0,
           })
         }
       } else {
@@ -81,18 +85,28 @@ export function activateUpgrade(pickup: Pickup, state: UpgradeState): UpgradeEve
             y: source.y,
             vx: Math.cos(angle) * speed,
             vy: Math.sin(angle) * speed,
-            r: 6,
+            r: ballR,
             trail: [],
             stuck: false,
 
             backWallHits: source.backWallHits,
             slamStacks: source.slamStacks,
             blastCharge: 0,
-            pierceLeft: 0,
+            pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, homingLeft: 0, homingCooldown: 0,
           })
         }
       }
     }
+  } else if (pickup.type === 'bigball') {
+    state.ballSizeBonus = Math.min(1.0, state.ballSizeBonus + pickup.tier * 0.1)
+    events.push({ type: 'applyBallSize' })
+  } else if (pickup.type === 'magnet') {
+    const charges = 4 + (pickup.tier - 1) * 2  // tier 1=4, 2=6, 3=8, 4=10
+    state.magnetCharges += charges
+  } else if (pickup.type === 'homing') {
+    const shots = 4 + (pickup.tier - 1) * 2  // tier 1=4, 2=6, 3=8, 4=10
+    for (const ball of state.balls) ball.homingLeft += shots
+    console.log(`[HOMING] pickup applied: +${shots} shots, balls now:`, state.balls.map(b => b.homingLeft))
   } else if (pickup.type === 'safety') {
     const wasFresh = state.safetyHits === 0
     state.safetyHits = Math.min(state.maxSafety, state.safetyHits + pickup.tier)
@@ -108,9 +122,9 @@ export function activateUpgrade(pickup: Pickup, state: UpgradeState): UpgradeEve
     const durations = [0, 4, 6, 9, 13]
     state.freezeTimer += durations[pickup.tier] ?? 4
   } else if (pickup.type === 'piercing') {
-    const pierceCounts = [0, 2, 3, 4, 5]
+    const pierceCounts = [0, 3, 6, 9, 12]
     for (const ball of state.balls) {
-      ball.pierceLeft = Math.max(ball.pierceLeft, pierceCounts[pickup.tier] ?? 2)
+      ball.pierceLeft = Math.max(ball.pierceLeft, pierceCounts[pickup.tier] ?? 3)
     }
   }
 
@@ -122,6 +136,12 @@ const letterElCache = new Map<string, HTMLElement>()
 
 export function hitBrick(brick: Brick, ball: Ball, state: UpgradeState): void {
   brick.alive = false
+
+  // Blank filler bricks (paragraph separators) — just destroy, no score/combo/particles
+  if (brick.word === '') {
+    return
+  }
+
   const points = Math.round(brick.points * state.multiplier)
   state.score += points
   state.wordsBroken++
@@ -149,9 +169,9 @@ export function hitBrick(brick: Brick, ball: Ball, state: UpgradeState): void {
   logWord(brick.word, points)
 
   // Spawn letter particles
+  const brickScreenY = brick.y - state.bricksScrollY
   for (let i = 0; i < brick.word.length; i++) {
     const ch = brick.word[i]
-    const brickScreenY = brick.y - state.bricksScrollY
     state.particles.push({
       x: brick.x + (i / brick.word.length) * brick.w + state.brickPadX,
       y: brickScreenY + brick.h / 2,
@@ -165,9 +185,38 @@ export function hitBrick(brick: Brick, ball: Ball, state: UpgradeState): void {
     })
   }
 
+  // Subtle spark burst — small dots radiate from impact
+  const cx = brick.x + brick.w / 2
+  const cy = brickScreenY + brick.h / 2
+  const sparkCount = 3 + Math.floor(Math.random() * 2)
+  for (let i = 0; i < sparkCount; i++) {
+    const angle = (i / sparkCount) * Math.PI * 2 + Math.random() * 0.8
+    const speed = 80 + Math.random() * 120
+    state.particles.push({
+      x: cx + (Math.random() - 0.5) * brick.w * 0.4,
+      y: cy + (Math.random() - 0.5) * brick.h * 0.3,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      char: '·',
+      life: 0.3 + Math.random() * 0.2,
+      maxLife: 0.5,
+      color: brick.color,
+      size: 6 + Math.random() * 4,
+    })
+  }
+  // Brief white flash at center
+  state.particles.push({
+    x: cx, y: cy,
+    vx: 0, vy: 0,
+    char: '∗',
+    life: 0.15, maxLife: 0.2,
+    color: '#ffffff',
+    size: 14 + brick.word.length * 0.5,
+  })
+
   // Gold coin — tier-based reward (stopwords give nothing)
   const coinTier = colorTier(brick.color)
-  const goldAmt = coinTier <= 0 ? 0 : coinTier === 1 ? 1 : coinTier === 2 ? 2 : coinTier === 3 ? 3 : 5
+  const goldAmt = coinTier <= 0 ? 0 : coinTier === 1 ? 2 : coinTier === 2 ? 3 : coinTier === 3 ? 5 : 8
   if (goldAmt > 0) {
     state.gold += goldAmt
     const bsy = brick.y - state.bricksScrollY
@@ -186,7 +235,7 @@ export function hitBrick(brick: Brick, ball: Ball, state: UpgradeState): void {
   if (ball.blastCharge > 0) {
     const bx = brick.x + brick.w / 2
     const bsy = brick.y - state.bricksScrollY + brick.h / 2
-    const count = ball.blastCharge + 2  // tier 1→3, 2→4, 3→5, 4→6
+    const count = ball.blastCharge + 3  // tier 1→4, 2→5, 3→6, 4→7
     ball.blastCharge = 0
     for (let i = 0; i < count; i++) {
       const angle = (i / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.3
@@ -222,6 +271,9 @@ export function hitBrick(brick: Brick, ball: Ball, state: UpgradeState): void {
     ]
     if (state.widenLevel < state.maxWiden) dropPool.push({ type: 'widen', weight: 0.22 })
     if (state.safetyHits < state.maxSafety) dropPool.push({ type: 'safety', weight: 0.15 })
+    if (state.ballSizeBonus < 1.0) dropPool.push({ type: 'bigball', weight: 0.12 })
+    dropPool.push({ type: 'magnet', weight: 0.14 })
+    dropPool.push({ type: 'homing', weight: 0.10 })
 
     if (dropPool.length === 0) return  // everything maxed, skip drop
 

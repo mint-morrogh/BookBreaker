@@ -32,6 +32,8 @@ export interface RenderState {
   levelState: string
   gold: number
   ballSpeed: number  // base ball speed for color intensity calc
+  magnetCharges: number
+  backWallReveal: number  // 0→1 animation for back wall line appearance
 }
 
 export function renderGame(
@@ -71,17 +73,19 @@ export function renderGame(
   }
   ctx.globalAlpha = 1
 
-  // Gold charge aura — nearby dots glow gold when charge is full
+  // Gold charge aura — nearby dots glow gold when charge is full, scales with paddle width
   if (state.charge >= 1.0) {
     const padCx = state.paddleX + state.paddleW / 2
     const padCy = state.paddleY + state.paddleH / 2
+    const auraR = Math.max(80, state.paddleW * 0.6)
+    const auraRSq = auraR * auraR
     ctx.fillStyle = '#fbbf24'
     for (const dot of state.dots) {
       const ddx = dot.x - padCx
       const ddy = dot.y - padCy
       const distSq = ddx * ddx + ddy * ddy
-      if (distSq < 6400) {
-        const t = 1 - Math.sqrt(distSq) / 80
+      if (distSq < auraRSq) {
+        const t = 1 - Math.sqrt(distSq) / auraR
         ctx.globalAlpha = t * 0.6
         ctx.beginPath()
         ctx.arc(dot.x, dot.y, 2.2, 0, Math.PI * 2)
@@ -117,7 +121,7 @@ export function renderGame(
     if (brick.boxed) {
       ctx.fillStyle = '#0f1520'
       ctx.strokeStyle = brick.color
-      ctx.lineWidth = brick.breakOff > 0 ? 2 : 1
+      ctx.lineWidth = 1
       roundRect(ctx, brick.x, brick.y, brick.w, brick.h, 3)
       ctx.fill()
       ctx.stroke()
@@ -134,17 +138,40 @@ export function renderGame(
   }
   ctx.restore()
 
-  // Pickups — wobbling upgrade labels
+  // Pickups — glowing upgrade capsules
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
   for (const p of state.pickups) {
     const wobbleX = Math.sin(p.wobblePhase) * 8
-    ctx.globalAlpha = 0.95
+    const pulse = 0.7 + Math.sin(p.wobblePhase * 1.8) * 0.3
+    const px = p.x + wobbleX
+    const py = p.y
+
+    // Measure label width for capsule
+    ctx.font = `bold 12px 'JetBrains Mono', monospace`
+    const tw = ctx.measureText(`✦ ${p.label} ✦`).width
+    const capW = tw + 20
+    const capH = 22
+
+    // Outer glow
     ctx.shadowColor = p.color
-    ctx.shadowBlur = 14
+    ctx.shadowBlur = 18 * pulse
+
+    // Dark capsule background
+    ctx.fillStyle = 'rgba(6, 8, 12, 0.85)'
+    ctx.strokeStyle = p.color
+    ctx.lineWidth = 1.5
+    roundRect(ctx, px - capW / 2, py - capH / 2, capW, capH, capH / 2)
+    ctx.fill()
+    ctx.stroke()
+    ctx.shadowBlur = 0
+
+    // Label text with decorative stars
+    ctx.globalAlpha = 0.95
     ctx.fillStyle = p.color
-    ctx.font = `bold 13px 'JetBrains Mono', monospace`
-    ctx.fillText(p.label, p.x + wobbleX, p.y)
+    ctx.shadowColor = p.color
+    ctx.shadowBlur = 8
+    ctx.fillText(`✦ ${p.label} ✦`, px, py + 1)
     ctx.shadowBlur = 0
   }
   ctx.globalAlpha = 1
@@ -228,6 +255,31 @@ export function renderGame(
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillText(state.paddleText, x + w / 2, y + h / 2 + 1)
+
+    // Magnet indicator — blue glow on front edge + charge counter
+    if (state.magnetCharges > 0) {
+      // Blue glow along the bottom (front) edge of the paddle
+      ctx.save()
+      ctx.shadowColor = '#7dd3fc'
+      ctx.shadowBlur = state.isMobile ? 6 : 14
+      ctx.strokeStyle = '#7dd3fc'
+      ctx.lineWidth = 2
+      ctx.globalAlpha = 0.7
+      ctx.beginPath()
+      ctx.moveTo(x + 3, y + h)
+      ctx.lineTo(x + w - 3, y + h)
+      ctx.stroke()
+      ctx.restore()
+
+      // Charge counter beside paddle
+      ctx.fillStyle = '#7dd3fc'
+      ctx.font = `bold 10px 'JetBrains Mono', monospace`
+      ctx.textAlign = 'left'
+      ctx.textBaseline = 'middle'
+      ctx.globalAlpha = 0.8
+      ctx.fillText(`×${state.magnetCharges}`, x + w + 6, y + h / 2)
+      ctx.globalAlpha = 1
+    }
   }
 
   // Safety bar — equals scale with hits, box around it
@@ -263,12 +315,23 @@ export function renderGame(
   ctx.fillStyle = topGrad
   ctx.fillRect(0, 0, W, 8)
 
-  // Back wall glow (bottom edge — red)
-  const wallGrad = ctx.createLinearGradient(0, H - 8, 0, H)
-  wallGrad.addColorStop(0, 'rgba(248, 113, 113, 0)')
-  wallGrad.addColorStop(1, 'rgba(248, 113, 113, 0.3)')
-  ctx.fillStyle = wallGrad
-  ctx.fillRect(0, H - 8, W, 8)
+  // Back wall glow (bottom edge — red) — draws itself from center outward
+  if (state.backWallReveal > 0) {
+    const r = state.backWallReveal
+    const halfW = (W / 2) * r
+    const cx = W / 2
+    const wallGrad = ctx.createLinearGradient(0, H - 8, 0, H)
+    wallGrad.addColorStop(0, 'rgba(248, 113, 113, 0)')
+    wallGrad.addColorStop(1, `rgba(248, 113, 113, ${0.3 * r})`)
+    ctx.fillStyle = wallGrad
+    ctx.fillRect(cx - halfW, H - 8, halfW * 2, 8)
+    // Bright tip at the expanding edge during reveal
+    if (r < 1) {
+      ctx.fillStyle = `rgba(248, 113, 113, ${0.7 * (1 - r)})`
+      ctx.fillRect(cx - halfW - 2, H - 4, 4, 4)
+      ctx.fillRect(cx + halfW - 2, H - 4, 4, 4)
+    }
+  }
 
   for (const ball of state.balls) {
     // Color intensity from actual velocity — 11 steps (0-10)
@@ -283,9 +346,8 @@ export function renderGame(
     // Trail — off-white tapered ribbon, grows wider/longer with speed
     if (ball.trail.length >= 2) {
       const len = ball.trail.length
-      const maxAge = 0.15
+      const maxAge = 0.15 + intensity * 0.012  // longer trail at higher speeds
       const baseAlpha = 0.3 + intensity * 0.04
-      const widthMult = 1 + intensity * 0.15  // wider trail at higher speeds
       ctx.strokeStyle = '#d8dce4'
       ctx.lineCap = 'round'
       ctx.lineJoin = 'round'
@@ -296,7 +358,7 @@ export function renderGame(
         const pct = 1 - t0.age / maxAge  // 1 at head, 0 at tail
         if (pct <= 0) continue
         ctx.globalAlpha = pct * pct * baseAlpha
-        ctx.lineWidth = ball.r * 2 * pct * widthMult
+        ctx.lineWidth = ball.r * 2 * pct
         ctx.beginPath()
         ctx.moveTo(t0.x, t0.y)
         // Smooth curve through midpoint to next point
@@ -311,13 +373,25 @@ export function renderGame(
     }
     ctx.globalAlpha = 1
 
-    // Ball body — canvas arc for sub-pixel smooth motion
+    // Ball body — triangle when homing, circle otherwise
     ctx.fillStyle = ballColor
     ctx.shadowColor = ballColor
     ctx.shadowBlur = 15 + intensity * 3
-    ctx.beginPath()
-    ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2)
-    ctx.fill()
+    if (ball.homingLeft > 0) {
+      // Triangle pointing in velocity direction (or up if stuck)
+      const angle = ball.stuck ? -Math.PI / 2 : Math.atan2(ball.vy, ball.vx)
+      const r = ball.r * 1.3
+      ctx.beginPath()
+      ctx.moveTo(ball.x + Math.cos(angle) * r, ball.y + Math.sin(angle) * r)
+      ctx.lineTo(ball.x + Math.cos(angle + 2.4) * r, ball.y + Math.sin(angle + 2.4) * r)
+      ctx.lineTo(ball.x + Math.cos(angle - 2.4) * r, ball.y + Math.sin(angle - 2.4) * r)
+      ctx.closePath()
+      ctx.fill()
+    } else {
+      ctx.beginPath()
+      ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2)
+      ctx.fill()
+    }
     ctx.shadowBlur = 0
 
     // Blast charge indicator — pulsing orange ring
@@ -333,7 +407,19 @@ export function renderGame(
       ctx.shadowBlur = 0
     }
 
-    // Piercing indicator — color shifts green → orange → red as pierce stacks
+    // Homing indicator — left side of ball
+    if (ball.homingLeft > 0) {
+      ctx.fillStyle = '#c084fc'
+      ctx.shadowColor = '#c084fc'
+      ctx.shadowBlur = 6
+      ctx.font = `bold 10px 'JetBrains Mono', monospace`
+      ctx.textAlign = 'right'
+      ctx.fillText(`×${ball.homingLeft}◀`, ball.x - ball.r - 4, ball.y)
+      ctx.shadowBlur = 0
+      ctx.textAlign = 'center'
+    }
+
+    // Piercing indicator — right side of ball
     if (ball.pierceLeft > 0) {
       const p = ball.pierceLeft
       const pierceColor = p >= 5 ? '#f87171' : p >= 4 ? '#f97316' : p >= 3 ? '#fbbf24' : p >= 2 ? '#a3e635' : '#4ade80'

@@ -103,6 +103,84 @@ export function renderGameOver(ctx: CanvasRenderingContext2D, W: number, H: numb
   ctx.fillText('[ CLICK or SPACE to restart ]', cx, H * 0.92)
 }
 
+// ── Overlay: Tutorial Complete ─────────────────────────────────
+export interface TutorialCompleteState {
+  score: number
+  wordsBroken: number
+  isNewHigh: boolean
+  endScores: number[]
+  isMobile: boolean
+}
+
+export function renderTutorialComplete(ctx: CanvasRenderingContext2D, W: number, H: number, s: TutorialCompleteState) {
+  ctx.fillStyle = 'rgba(6, 8, 12, 0.94)'
+  ctx.fillRect(0, 0, W, H)
+
+  const cx = W / 2
+
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+
+  // ─── Title ───
+  ctx.fillStyle = '#e8c44a'
+  ctx.shadowColor = '#e8c44a'
+  ctx.shadowBlur = 30
+  ctx.font = `bold 28px 'JetBrains Mono', monospace`
+  ctx.fillText('TUTORIAL COMPLETE', cx, H * 0.22)
+  ctx.shadowBlur = 0
+
+  // ─── Subtitle ───
+  ctx.fillStyle = '#4ade80'
+  ctx.font = `bold 14px 'JetBrains Mono', monospace`
+  ctx.fillText('Congratulations!', cx, H * 0.30)
+
+  ctx.fillStyle = '#5a6578'
+  ctx.font = `12px 'JetBrains Mono', monospace`
+  ctx.fillText(`${s.wordsBroken} words broken`, cx, H * 0.36)
+
+  // ─── Final score ───
+  ctx.fillStyle = '#5a6578'
+  ctx.font = `bold 10px 'JetBrains Mono', monospace`
+  ctx.fillText('SCORE', cx, H * 0.44)
+
+  ctx.fillStyle = '#e8c44a'
+  ctx.shadowColor = '#e8c44a'
+  ctx.shadowBlur = 12
+  ctx.font = `bold 32px 'JetBrains Mono', monospace`
+  ctx.fillText(s.score.toLocaleString(), cx, H * 0.50)
+  ctx.shadowBlur = 0
+
+  // ─── New high score ───
+  if (s.isNewHigh) {
+    ctx.fillStyle = '#e8c44a'
+    ctx.font = `bold 13px 'JetBrains Mono', monospace`
+    ctx.fillText('★ NEW HIGH SCORE ★', cx, H * 0.57)
+  }
+
+  // ─── High score ───
+  const topScore = s.endScores.length > 0 ? s.endScores[0] : 0
+  if (topScore > 0) {
+    ctx.fillStyle = '#5a6578'
+    ctx.font = `bold 10px 'JetBrains Mono', monospace`
+    ctx.fillText('HIGH SCORE', cx, H * 0.64)
+
+    ctx.fillStyle = '#c8d0dc'
+    ctx.font = `bold 20px 'JetBrains Mono', monospace`
+    ctx.fillText(topScore.toLocaleString(), cx, H * 0.69)
+  }
+
+  // ─── Call to action ───
+  ctx.fillStyle = '#4ade80'
+  ctx.font = `14px 'JetBrains Mono', monospace`
+  ctx.fillText("You're ready for the real thing.", cx, H * 0.80)
+
+  // ─── Continue prompt ───
+  const action = s.isMobile ? 'TAP' : 'CLICK or SPACE'
+  ctx.fillStyle = '#7dd3fc'
+  ctx.font = `bold 13px 'JetBrains Mono', monospace`
+  ctx.fillText(`[ ${action} to choose a book ]`, cx, H * 0.92)
+}
+
 // ── Overlay: Level Complete ────────────────────────────────────
 export interface LevelCompleteState {
   levelWords: WordEntry[]

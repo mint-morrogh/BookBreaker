@@ -29,6 +29,10 @@ export interface Ball {
   slamStacks: number    // speed stacks from paddle slams (decays on non-slam paddle hits)
   blastCharge: number   // 0 = none, else tier (1-4) = blast radius on next hit
   pierceLeft: number    // 0 = normal bounce, else bricks remaining to pierce through
+  magnetSpeed: number   // if > 0, launch at this speed instead of default (preserved from catch)
+  magnetImmunity: number // seconds of immunity to magnet re-catch after launching from magnet
+  homingLeft: number    // remaining homing shots (0 = normal, >0 = arc toward highest-value brick)
+  homingCooldown: number // seconds of free movement after a homing hit before re-engaging
 }
 
 export interface Particle {
@@ -40,7 +44,7 @@ export interface Particle {
   size: number
 }
 
-export type UpgradeType = 'widen' | 'multiball' | 'safety' | 'blast' | 'freeze' | 'piercing'
+export type UpgradeType = 'widen' | 'multiball' | 'safety' | 'blast' | 'freeze' | 'piercing' | 'bigball' | 'magnet' | 'homing'
 
 export interface Pickup {
   label: string
@@ -77,6 +81,7 @@ export interface ShopItem {
   desc: string
   price: number
   rarity: ShopRarity
+  tier: number       // 1-4, derived from rarity — determines effect strength
   bought: boolean
   maxed?: boolean
 }

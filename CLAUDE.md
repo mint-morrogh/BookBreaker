@@ -36,6 +36,16 @@ IDs: Use first 8 chars of the task UUID.
 
 Be extremely concise. Sacrifice grammar for the sake of concision.
 
+## Code Modularity
+
+**CRITICAL: `game.ts` is the core game loop and is already large. Do NOT dump new feature logic into it.**
+
+- New features (tutorial, bosses, power-ups, etc.) get their own `.ts` file under `src/`.
+- The feature module exports a controller/class and pure functions. `game.ts` calls into it with minimal glue (1-liner checks, action dispatch).
+- Pattern: feature module returns action enums/strings, `game.ts` switches on them. Decision logic stays in the feature module.
+- Inline checks in `game.ts` (e.g. `if (this.tutorial)` guards) are fine when they're 1-2 lines. Multi-line blocks belong in the feature module.
+- Existing extracted modules to follow as examples: `physics.ts`, `upgrades.ts`, `shop.ts`, `islands.ts`, `render-game.ts`, `tutorial.ts`.
+
 ## Mobile Performance Rules
 
 **CRITICAL — learned the hard way:**

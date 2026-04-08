@@ -1,8 +1,9 @@
 import { Game, getTopScore } from './game'
 import { BOOKS, makeCustomBook, addCustomBook, removeCustomBook } from './content'
 import { tagBook } from './tagger'
-import { clearAllScores } from './scoring'
+import { clearAllScores, isBookBeaten } from './scoring'
 import { parseFile, detectFormat, ACCEPTED_EXTENSIONS } from './book-parser'
+import { createTutorialBook, isTutorialDone, markTutorialDone, TutorialController } from './tutorial'
 
 // One-time migration: clear old scores for unlock system
 if (!localStorage.getItem('bb_unlock_v1')) {
@@ -82,7 +83,7 @@ function showMainMenu() {
     menuBtns.appendChild(contBtn)
 
     const newBtn = document.createElement('button')
-    newBtn.className = 'menu-btn muted'
+    newBtn.className = 'menu-btn'
     newBtn.textContent = 'NEW RUN'
     newBtn.addEventListener('click', () => showForfeitConfirm())
     menuBtns.appendChild(newBtn)
@@ -146,6 +147,31 @@ const diffColors: Record<string, string> = { Easy: '#4ade80', Medium: '#fbbf24',
 
 function renderBookList() {
   bookList.innerHTML = ''
+
+  // ── Tutorial section (above all difficulty tiers) ──
+  const tutDone = isTutorialDone()
+  const tutColor = tutDone ? '#e8c44a' : '#7dd3fc'
+  const tutHeader = document.createElement('div')
+  tutHeader.className = 'tier-header'
+  tutHeader.innerHTML = `<span class="tier-line"></span><span style="color:${tutColor}">TUTORIAL</span><span class="tier-line"></span>`
+  bookList.appendChild(tutHeader)
+
+  const tutEl = document.createElement('div')
+  tutEl.className = 'book-option' + (tutDone ? ' tutorial-done' : '')
+  const tutScore = getTopScore('Tutorial')
+  tutEl.innerHTML = `
+    ${tutDone ? '<span class="book-opt-star">★</span>' : ''}
+    <div class="book-opt-title" style="${tutDone ? 'color:#e8c44a;' : ''}">Tutorial</div>
+    <div class="book-opt-author">Learn the basics</div>
+    <div class="book-opt-meta">
+      <span>${tutDone ? 'COMPLETED' : 'START HERE'}</span>
+      ${tutScore > 0 ? `<span class="book-opt-score${tutDone ? ' beaten' : ''}">${tutScore.toLocaleString()}</span>` : ''}
+      <span style="color:${tutColor}">Tutorial</span>
+    </div>
+  `
+  tutEl.addEventListener('click', () => launchTutorial())
+  bookList.appendChild(tutEl)
+
   let lastDiff = ''
   BOOKS.forEach((book, idx) => {
     const diffColor = diffColors[book.difficulty] ?? '#c8d0dc'
@@ -167,18 +193,20 @@ function renderBookList() {
     }
 
     const top = unlocked ? getTopScore(book.title) : 0
+    const beaten = unlocked && isBookBeaten(book.title)
     const el = document.createElement('div')
-    el.className = 'book-option' + (unlocked ? '' : ' locked')
+    el.className = 'book-option' + (unlocked ? '' : ' locked') + (beaten ? ' played' : '')
 
     if (unlocked) {
       const isCustom = book.difficulty === 'Custom'
       el.innerHTML = `
+        ${beaten ? '<span class="book-opt-star">★</span>' : ''}
         <div class="book-opt-title">${book.title}</div>
         <div class="book-opt-author">${book.author || 'Unknown'}</div>
         <div class="book-opt-meta">
           <span>${book.chapters.length} chapters</span>
+          ${top > 0 ? `<span class="book-opt-score${beaten ? ' beaten' : ''}">${top.toLocaleString()}</span>` : ''}
           <span style="color:${diffColor}">${book.difficulty}</span>
-          ${top > 0 ? `<span class="book-opt-score">★ ${top.toLocaleString()}</span>` : ''}
           ${isCustom ? '<span class="book-opt-delete">✕</span>' : ''}
         </div>
       `
@@ -390,9 +418,24 @@ importSubmit.addEventListener('click', () => {
 
 importCancel.addEventListener('click', showBookPicker)
 
+// ── Tutorial launcher ──────────────────────────────────────────
+async function launchTutorial() {
+  const isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0
+  const book = createTutorialBook(isMobile)
+  // Temporarily add tutorial book to BOOKS so Game can reference it by index
+  let idx = BOOKS.findIndex(b => b.title === 'Tutorial' && (b.difficulty as string) === 'Tutorial')
+  if (idx === -1) {
+    idx = BOOKS.length
+    BOOKS.push(book)
+  } else {
+    BOOKS[idx] = book
+  }
+  const tutorial = new TutorialController()
+  loadAndStart(idx, null, tutorial)
+}
+
 // ── Load and start game ────────────────────────────────────────
-async function loadAndStart(bookIdx: number, save?: ReturnType<Game['getSaveState']> | null) {
-  const book = BOOKS[bookIdx]
+async function loadAndStart(bookIdx: number, save?: ReturnType<Game['getSaveState']> | null, tutorial?: TutorialController) {
   const overlay = document.getElementById('loading-overlay')!
   const bar = document.getElementById('loading-bar')!
   const status = document.getElementById('loading-status')!
@@ -400,6 +443,19 @@ async function loadAndStart(bookIdx: number, save?: ReturnType<Game['getSaveStat
 
   hideAll()
   overlay.classList.add('active')
+
+  try {
+  const book = BOOKS[bookIdx]
+
+  if (!book) {
+    // Stale save pointing at a removed book — clear save and bail
+    console.error(`[loadAndStart] bookIdx ${bookIdx} out of range (${BOOKS.length} books)`)
+    overlay.classList.remove('active')
+    if (save) Game.clearSave()
+    showMainMenu()
+    return
+  }
+
   bookLabel.textContent = book.title
   bar.style.width = '0%'
   status.textContent = 'analyzing parts of speech...'
@@ -409,22 +465,31 @@ async function loadAndStart(bookIdx: number, save?: ReturnType<Game['getSaveStat
     bar.style.width = `${pct}%`
     const done = Math.round(ratio * book.chapters.length)
     status.textContent = `analyzing chapter ${done} / ${book.chapters.length}...`
-  })
-
-  bar.style.width = '95%'
-  status.textContent = `tagged ${tagMap.size} unique words`
-  await new Promise(r => setTimeout(r, 200))
+  }, book.title)
 
   bar.style.width = '100%'
   status.textContent = 'ready'
-  await new Promise(r => setTimeout(r, 400))
+  await new Promise(r => setTimeout(r, 150))
 
   overlay.classList.remove('active')
   document.getElementById('app')!.style.display = 'flex'
 
   const canvas = document.getElementById('game') as HTMLCanvasElement
-  const game = new Game(canvas, bookIdx, tagMap)
+  let running = true
+  const game = new Game(canvas, bookIdx, tagMap, tutorial)
   activeGame = game
+  // Mark that a game is actively running (survives mobile page kills)
+  if (!tutorial) localStorage.setItem('bb_in_game', '1')
+
+  // Tutorial: return to book picker when game ends
+  if (tutorial) {
+    game.onGameEnd = () => {
+      running = false
+      activeGame = null
+      hideAll()
+      showBookPicker()
+    }
+  }
 
   // Restore saved run state if provided
   if (save) {
@@ -433,6 +498,7 @@ async function loadAndStart(bookIdx: number, save?: ReturnType<Game['getSaveStat
 
   let last = 0
   function loop(time: number) {
+    if (!running) return
     const dt = Math.min((time - last) / 1000, 0.05)
     last = time
     game.update(dt)
@@ -443,7 +509,20 @@ async function loadAndStart(bookIdx: number, save?: ReturnType<Game['getSaveStat
     last = time
     requestAnimationFrame(loop)
   })
+
+  } catch (err) {
+    console.error('[loadAndStart] fatal error:', err)
+    overlay.classList.remove('active')
+    if (save) Game.clearSave()
+    showMainMenu()
+  }
 }
 
-// ── Entry point — show main menu ───────────────────────────────
-showMainMenu()
+// ── Entry point — auto-resume if game was active, else show menu ──
+const _bootSave = Game.loadFromStorage()
+if (_bootSave && localStorage.getItem('bb_in_game') === '1') {
+  // Mobile browser killed the page while game was running — jump straight back in
+  loadAndStart(_bootSave.bookIdx, _bootSave)
+} else {
+  showMainMenu()
+}

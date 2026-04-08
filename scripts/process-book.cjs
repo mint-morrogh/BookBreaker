@@ -4,7 +4,7 @@
  *
  * Converts raw text files into game-ready TypeScript book modules.
  * Handles Gutenberg headers, chapter detection, paragraph splitting,
- * punctuation stripping, accent normalization, fused-word fixing,
+ * punctuation normalization, accent normalization, fused-word fixing,
  * long-paragraph splitting, and auto-difficulty classification.
  *
  * Usage:
@@ -216,18 +216,21 @@ function cleanText(text) {
   // Normalize accented characters (é→e, ñ→n, etc.)
   t = normalizeAccents(t)
 
-  // Replace curly/smart quotes with nothing
-  t = t.replace(/[\u2018\u2019\u201A\u201B]/g, '')  // single curly quotes
-  t = t.replace(/[\u201C\u201D\u201E\u201F]/g, '')  // double curly quotes
+  // Normalize curly/smart quotes to straight equivalents
+  t = t.replace(/[\u2018\u2019\u201B]/g, "'")  // single curly → straight apostrophe
+  t = t.replace(/[\u201A]/g, ",")               // low single quote → comma
+  t = t.replace(/[\u201C\u201D\u201E\u201F]/g, '"')  // double curly → straight quote
 
-  // Replace ellipsis character with space
-  t = t.replace(/\u2026/g, ' ')
+  // Normalize ellipsis character
+  t = t.replace(/\u2026/g, '...')
 
-  // Replace hyphens, dashes, and similar with spaces BEFORE stripping
-  t = t.replace(/[-\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g, ' ')
+  // Normalize dashes — em/en dashes become " -- "
+  t = t.replace(/[\u2013\u2014\u2015]/g, ' -- ')
+  // Hyphens within words stay (e.g. well-known), standalone hyphens become spaces
+  t = t.replace(/ - /g, ' -- ')
 
-  // Strip all remaining non-alphanumeric (keep letters, numbers, spaces)
-  t = t.replace(/[^a-zA-Z0-9 ]/g, '')
+  // Strip characters that aren't letters, numbers, spaces, or common punctuation
+  t = t.replace(/[^a-zA-Z0-9 .,;:!?'"()\-]/g, '')
 
   // Fix camelCase fusions (from stripped punctuation between sentences)
   t = t.replace(/([a-z])([A-Z])/g, '$1 $2')
@@ -242,7 +245,7 @@ function cleanText(text) {
   return t
 }
 
-// ── Split long paragraphs at sentence-ish boundaries ────────────
+// ── Split long paragraphs at sentence boundaries ───────────────
 function splitLongParagraph(text, maxWords) {
   const words = text.split(' ')
   if (words.length <= maxWords) return [text]
@@ -252,14 +255,11 @@ function splitLongParagraph(text, maxWords) {
 
   for (const word of words) {
     current.push(word)
-    // Try to split near the limit at a word that likely ends a sentence
-    // (ends with a common sentence-ending pattern after cleaning)
-    if (current.length >= maxWords * 0.8 && current.length <= maxWords) {
-      // Good enough — split here
-      if (current.length >= maxWords) {
-        chunks.push(current.join(' '))
-        current = []
-      }
+    const atSentenceEnd = /[.!?;]"?'?$/.test(word)
+    // Try to split near the limit at a sentence boundary
+    if (current.length >= maxWords * 0.7 && atSentenceEnd) {
+      chunks.push(current.join(' '))
+      current = []
     } else if (current.length > maxWords) {
       // Over limit — force split
       chunks.push(current.join(' '))

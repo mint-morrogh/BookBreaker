@@ -24,10 +24,42 @@ function yieldToUI(): Promise<void> {
  * Processes chapter-by-chapter, yielding between each so the loading bar updates.
  * Calls onProgress(0–1) between chunks.
  */
+/** Cache key for a book's tagMap in localStorage */
+function cacheKey(bookTitle: string): string {
+  return `bb_tags_${bookTitle}`
+}
+
+/** Try to load a cached tagMap; returns null on miss or error */
+export function loadCachedTags(bookTitle: string): Map<string, WordTag> | null {
+  try {
+    const raw = localStorage.getItem(cacheKey(bookTitle))
+    if (!raw) return null
+    const entries: [string, WordTag][] = JSON.parse(raw)
+    return new Map(entries)
+  } catch { return null }
+}
+
+/** Save a tagMap to localStorage */
+function cacheTags(bookTitle: string, tagMap: Map<string, WordTag>): void {
+  try {
+    localStorage.setItem(cacheKey(bookTitle), JSON.stringify([...tagMap]))
+  } catch { /* storage full — non-critical */ }
+}
+
 export async function tagBook(
   chapters: { title: string; paragraphs: string[] }[],
   onProgress?: (ratio: number) => void,
+  bookTitle?: string,
 ): Promise<Map<string, WordTag>> {
+  // Fast path: return cached tags if available
+  if (bookTitle) {
+    const cached = loadCachedTags(bookTitle)
+    if (cached) {
+      onProgress?.(1)
+      return cached
+    }
+  }
+
   const tagMap = new Map<string, WordTag>()
   const allPeople = new Set<string>()
   const allPlaces = new Set<string>()
@@ -100,5 +132,6 @@ export async function tagBook(
     await yieldToUI()
   }
 
+  if (bookTitle) cacheTags(bookTitle, tagMap)
   return tagMap
 }

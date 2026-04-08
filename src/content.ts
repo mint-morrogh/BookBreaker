@@ -21,7 +21,7 @@ export interface Chapter {
   paragraphs: string[]
 }
 
-export type Difficulty = 'Easy' | 'Medium' | 'Hard' | 'Very Hard' | 'Custom'
+export type Difficulty = 'Tutorial' | 'Easy' | 'Medium' | 'Hard' | 'Very Hard' | 'Custom'
 
 export interface Book {
   title: string

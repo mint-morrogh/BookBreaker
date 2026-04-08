@@ -39,6 +39,14 @@ export function getTopScore(bookTitle: string): number {
   return scores.length > 0 ? scores[0] : 0
 }
 
+export function markBookBeaten(bookTitle: string): void {
+  localStorage.setItem(`bb_beaten_${bookTitle}`, '1')
+}
+
+export function isBookBeaten(bookTitle: string): boolean {
+  return localStorage.getItem(`bb_beaten_${bookTitle}`) === '1'
+}
+
 export function clearAllScores(): void {
   const toRemove: string[] = []
   for (let i = 0; i < localStorage.length; i++) {

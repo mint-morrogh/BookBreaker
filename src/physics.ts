@@ -17,8 +17,11 @@ export interface PhysicsState {
   safetyHits: number
   paddleVy: number
   slamWallTimer: number  // how long paddle has been sitting at max extension
+  slamActive: boolean    // true while paddle is traveling forward or held at wall
   ballSpeed: number
   bricksScrollY: number
+  magnetCharges: number  // remaining magnet catches
+  backWallActive: boolean  // speed bonuses only after all bricks enter play area
 }
 
 // ── Events emitted by physics ──────────────────────────────────
@@ -28,6 +31,7 @@ export type PhysicsEvent =
   | { type: 'backWallHit'; ball: Ball; hitCount: number; particle: Particle }
   | { type: 'safetyHit' }
   | { type: 'paddleSlam'; ball: Ball; tier: number }
+  | { type: 'magnetCatch'; ball: Ball; speed: number }
 
 export function updateBalls(
   balls: Ball[],
@@ -55,21 +59,22 @@ export function updateBalls(
     // This keeps the trail smooth at any speed without gaps
     ball.trail.push({ x: ball.x, y: ball.y, age: 0 })
     for (const t of ball.trail) t.age += dt
-    // Trim points older than 0.15s — trail length is speed-proportional
-    while (ball.trail.length > 0 && ball.trail[0].age > 0.15) ball.trail.shift()
+    // Trim points older than 0.27s — renderer fades within dynamic maxAge per intensity
+    while (ball.trail.length > 0 && ball.trail[0].age > 0.27) ball.trail.shift()
 
     ball.x += ball.vx * dt
     ball.y += ball.vy * dt
+    if (ball.magnetImmunity > 0) ball.magnetImmunity -= dt
 
     // Wall bounce
     if (ball.x - ball.r < 0) { ball.x = ball.r; ball.vx = Math.abs(ball.vx) }
     if (ball.x + ball.r > state.W) { ball.x = state.W - ball.r; ball.vx = -Math.abs(ball.vx) }
 
-    // Bounce off bottom (back wall) — speed boost!
+    // Bounce off bottom (back wall) — speed boost only after wall activates
     if (ball.y + ball.r > state.H) {
       ball.y = state.H - ball.r
       ball.vy = -Math.abs(ball.vy)
-      if (ball.backWallHits < 10) {
+      if (state.backWallActive && ball.backWallHits < 10) {
         ball.backWallHits++
         // 1.1x speed boost per hit
         ball.vx *= 1.1
@@ -123,18 +128,33 @@ export function updateBalls(
       ball.x <= state.paddleX + state.paddleW
     ) {
       ball.y = state.paddleY + state.paddleH + ball.r
+      const speed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy)
       // Shed one back-wall speed stack on each paddle hit
-      if (ball.backWallHits > 0) {
-        ball.backWallHits--
+      const hadStacks = ball.backWallHits > 0
+      if (hadStacks) ball.backWallHits--
+      const postShedSpeed = hadStacks ? speed / 1.1 : speed
+
+      // Magnet catch: only when paddle is at rest (not slamming), preserves momentum
+      if (state.magnetCharges > 0 && ball.magnetImmunity <= 0 && !state.slamActive) {
+        ball.magnetSpeed = postShedSpeed
+        ball.stuck = true
+        ball.vx = 0
+        ball.vy = 0
+        ball.trail = []  // clear trail to avoid frozen artifact
+        events.push({ type: 'magnetCatch', ball, speed: postShedSpeed })
+        continue  // skip normal bounce + slam logic
+      }
+
+      // Normal bounce — apply the shed to velocity
+      if (hadStacks) {
         ball.vx /= 1.1
         ball.vy /= 1.1
       }
       // Angle based on where it hit the paddle
       const hitPos = (ball.x - state.paddleX) / state.paddleW // 0..1
       const angle = Math.PI * 0.15 + hitPos * Math.PI * 0.7 // spread downward
-      const speed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy)
-      ball.vx = Math.cos(angle) * speed
-      ball.vy = Math.sin(angle) * speed  // positive = downward
+      ball.vx = Math.cos(angle) * postShedSpeed
+      ball.vy = Math.sin(angle) * postShedSpeed  // positive = downward
 
       // Slam detection — timing-based: rewards pressing right as ball arrives.
       // If paddle is mid-travel, use distance from max extension.
@@ -146,8 +166,8 @@ export function updateBalls(
         let slamTier: number
         if (distFromMax >= 2) {
           // Paddle is still in transit — use positional tiers (already requires good timing)
-          if (distFromMax < 4) {
-            slamTier = 3  // PERFECT — about to hit the wall
+          if (distFromMax < 2.5) {
+            slamTier = 3  // PERFECT — frame-perfect, nearly at the wall
           } else if (distFromMax < 10) {
             slamTier = 2  // GREAT — close
           } else {
@@ -157,8 +177,8 @@ export function updateBalls(
           // Paddle is AT the wall — use time-at-wall to determine quality.
           // Just arrived = rewarded, camping = no bonus.
           const t = state.slamWallTimer
-          if (t < 0.06) {
-            slamTier = 3  // PERFECT — ball hit within 60ms of arriving at wall
+          if (t < 0.025) {
+            slamTier = 3  // PERFECT — ball hit within ~1-2 frames of arriving at wall
           } else if (t < 0.15) {
             slamTier = 2  // GREAT — within 150ms
           } else if (t < 0.30) {
@@ -169,7 +189,8 @@ export function updateBalls(
         }
 
         if (slamTier > 0) {
-          ball.pierceLeft = slamTier
+          // Good = speed only, Great = 1 pierce, Perfect = 2 pierce
+          ball.pierceLeft = Math.max(0, slamTier - 1)
 
           // Slam speed boost — 1.1x per tier, symmetrical with decay
           const newStacks = Math.min(10, ball.slamStacks + slamTier)

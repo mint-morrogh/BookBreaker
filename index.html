@@ -168,8 +168,25 @@
       background: transparent;
       cursor: pointer;
       transition: background 0.15s, color 0.15s;
+      -webkit-tap-highlight-color: transparent;
     }
-    .menu-btn:hover, .menu-btn:active {
+    /* Hover only on devices that support it (not touch) */
+    @media (hover: hover) {
+      .menu-btn:hover {
+        background: #e8c44a;
+        color: #06080c;
+      }
+      .menu-btn.danger:hover {
+        background: #f87171;
+        color: #06080c;
+      }
+      .menu-btn.muted:hover {
+        background: #4a5568;
+        color: #06080c;
+      }
+    }
+    /* Active (press) works on both touch and mouse */
+    .menu-btn:active {
       background: #e8c44a;
       color: #06080c;
     }
@@ -177,7 +194,7 @@
       border-color: #f87171;
       color: #f87171;
     }
-    .menu-btn.danger:hover, .menu-btn.danger:active {
+    .menu-btn.danger:active {
       background: #f87171;
       color: #06080c;
     }
@@ -185,7 +202,7 @@
       border-color: #4a5568;
       color: #4a5568;
     }
-    .menu-btn.muted:hover, .menu-btn.muted:active {
+    .menu-btn.muted:active {
       background: #4a5568;
       color: #06080c;
     }
@@ -208,11 +225,17 @@
       padding: 40px 0;
     }
     .picker-title {
-      font-size: 42px;
-      font-weight: 700;
+      font: bold 28px 'JetBrains Mono', 'Courier New', monospace;
       color: #e8c44a;
-      letter-spacing: 8px;
-      text-shadow: 0 0 40px rgba(232, 196, 74, 0.35), 0 0 80px rgba(232, 196, 74, 0.1);
+      letter-spacing: 3px;
+      background: #1a1810;
+      border: 2px solid #e8c44a;
+      border-radius: 3px;
+      padding: 10px 20px;
+      box-shadow: 0 0 20px rgba(232, 196, 74, 0.3), 0 0 60px rgba(232, 196, 74, 0.1);
+      display: inline-block;
+      margin-bottom: 8px;
+      white-space: nowrap;
     }
     .picker-subtitle {
       font-size: 11px;
@@ -240,16 +263,33 @@
       cursor: pointer;
       transition: all 0.25s ease;
       position: relative;
+      -webkit-tap-highlight-color: transparent;
     }
-    .book-option:hover {
-      border-color: #e8c44a;
-      border-left-color: #e8c44a;
-      background: #0f1520;
-      box-shadow: 0 0 24px rgba(232, 196, 74, 0.08), inset 0 0 30px rgba(232, 196, 74, 0.02);
+    .book-option.played {
+      border-color: rgba(232, 196, 74, 0.15);
+      border-left-color: rgba(232, 196, 74, 0.25);
+      box-shadow: 0 0 12px rgba(232, 196, 74, 0.04);
     }
-    .book-option:hover .book-opt-title {
+    .book-option .book-opt-star {
+      position: absolute;
+      top: 6px;
+      right: 8px;
+      font-size: 10px;
       color: #e8c44a;
-      text-shadow: 0 0 12px rgba(232, 196, 74, 0.2);
+      opacity: 0.6;
+      text-shadow: 0 0 6px rgba(232, 196, 74, 0.4);
+    }
+    @media (hover: hover) and (pointer: fine) {
+      .book-option:hover {
+        border-color: #e8c44a;
+        border-left-color: #e8c44a;
+        background: #0f1520;
+        box-shadow: 0 0 24px rgba(232, 196, 74, 0.08), inset 0 0 30px rgba(232, 196, 74, 0.02);
+      }
+      .book-option:hover .book-opt-title {
+        color: #e8c44a;
+        text-shadow: 0 0 12px rgba(232, 196, 74, 0.2);
+      }
     }
     .book-option .book-opt-title {
       font-size: 15px;
@@ -276,23 +316,28 @@
       letter-spacing: 1px;
     }
     .book-opt-score {
-      color: #e8c44a;
+      color: #8a9bb0;
       font-weight: 700;
+    }
+    .book-opt-score.beaten {
+      color: #e8c44a;
       text-shadow: 0 0 8px rgba(232, 196, 74, 0.3);
     }
     .book-option.locked {
       opacity: 0.35;
       cursor: not-allowed;
     }
-    .book-option.locked:hover {
-      border-color: #1a2030;
-      border-left-color: #1a2030;
-      background: #0a0e16;
-      box-shadow: none;
-    }
-    .book-option.locked:hover .book-opt-title {
-      color: #c8d0dc;
-      text-shadow: none;
+    @media (hover: hover) and (pointer: fine) {
+      .book-option.locked:hover {
+        border-color: #1a2030;
+        border-left-color: #1a2030;
+        background: #0a0e16;
+        box-shadow: none;
+      }
+      .book-option.locked:hover .book-opt-title {
+        color: #c8d0dc;
+        text-shadow: none;
+      }
     }
     .locked-title {
       letter-spacing: 4px !important;
@@ -333,6 +378,16 @@
       text-align: center;
       padding: 2px 0 4px;
       font-style: italic;
+    }
+    .book-option.tutorial-done {
+      border-color: rgba(232, 196, 74, 0.2);
+      border-left-color: rgba(232, 196, 74, 0.4);
+      background: rgba(232, 196, 74, 0.03);
+      box-shadow: 0 0 16px rgba(232, 196, 74, 0.05);
+    }
+    .book-option.tutorial-done .book-opt-meta span:first-child {
+      color: #e8c44a;
+      letter-spacing: 2px;
     }
     /* Sidebar book info */
     #book-info {
