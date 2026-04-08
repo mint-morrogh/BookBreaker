@@ -10,10 +10,11 @@ import { renderGameOver, renderPause, renderTutorialComplete } from './renderer'
 import { updateBalls, type PhysicsState } from './physics'
 import { activateUpgrade as runActivateUpgrade, hitBrick as runHitBrick, type UpgradeState } from './upgrades'
 import { renderGame, type RenderState } from './render-game'
-import { generateShopItems, isShopItemMaxed, renderShop, type ShopRenderState } from './shop'
+import { generateShopItems, getRerollCost, isShopItemMaxed, renderShop, type ShopRenderState } from './shop'
 import { detectIslands, updateIslandGroups, type IslandGroup } from './islands'
 import { saveToStorage, loadFromStorage, clearSave, snapBrick, unsnapBrick, snapBall, unsnapBall, snapPickup, unsnapPickup, type SaveState } from './save'
 import { TutorialController, markTutorialDone } from './tutorial'
+import { createBoss, updateBoss, renderBoss, bossGoldReward, bossScoreBonus, type BossState } from './boss'
 
 // ── Upgrade caps ──────────────────────────────────────────────
 export const MAX_WIDEN = 8
@@ -100,7 +101,7 @@ export class Game {
 
   // shop bonuses (persist across levels, reset on restart)
   private dropBonus = 0           // flat % added to upgrade drop chance (Lucky Drops)
-  private ballSizeBonus = 0       // 0-1.0 (0%-100%), each tier adds 0.1, cap 1.0
+  private ballSizeBonus = 0       // 0-2.0 (0%-200%), each tier adds 0.2, cap 2.0
   private magnetCharges = 0       // remaining magnet catches (ball sticks to paddle)
   private _homingDbg = 0           // debug throttle timer (temp)
 
@@ -123,10 +124,11 @@ export class Game {
   private shopItems: ShopItem[] = []
   private shopRects: { x: number; y: number; w: number; h: number }[] = []
   private shopContinueRect = { x: 0, y: 0, w: 0, h: 0 }
+  private shopRerollRect = { x: 0, y: 0, w: 0, h: 0 }
 
   // end-of-chapter sequence
   private levelWords: { word: string; color: string; points: number }[] = []
-  private levelState: 'playing' | 'grayCleanup' | 'endPopping' | 'endTally' | 'endGrade' | 'shop' = 'playing'
+  private levelState: 'playing' | 'grayCleanup' | 'endPopping' | 'endTally' | 'endGrade' | 'bossIntro' | 'bossFight' | 'shop' = 'playing'
   private grayPopBricks: Brick[] = []
   private grayPopIdx = 0
   private grayPopTimer = 0
@@ -141,6 +143,9 @@ export class Game {
   private endTotalWords = 0
   private endBrokenWords = 0
   private levelLivesLost = 0
+
+  // boss fight
+  private boss: BossState | null = null
 
   // high scores (set on game over)
   private endScores: number[] = []
@@ -242,9 +247,10 @@ export class Game {
           this.endScores = saveHighScore(this.book.title, this.score)
           this.isNewHigh = this.score > 0 && this.score >= prevTop
         } else {
-          this.paragraphsCompleted++
-          this.openShop()
+          this.endGradeAdvance()
         }
+      } else if (this.levelState === 'bossIntro') {
+        this.startBossFight()
       } else {
         // Slam paddle — launches stuck ball on slam start
         if (this.slamCooldown <= 0) this.mouseDown = true
@@ -299,9 +305,12 @@ export class Game {
           this.endScores = saveHighScore(this.book.title, this.score)
           this.isNewHigh = this.score > 0 && this.score >= prevTop
         } else {
-          this.paragraphsCompleted++
-          this.openShop()
+          this.endGradeAdvance()
         }
+        return
+      }
+      if (this.levelState === 'bossIntro') {
+        this.startBossFight()
         return
       }
 
@@ -459,6 +468,33 @@ export class Game {
         const y = r * spacing
         this.dots.push({ homeX: x, homeY: y, x, y, vx: 0, vy: 0 })
       }
+    }
+  }
+
+  private updateDotField(dt: number) {
+    for (const dot of this.dots) {
+      const dx = dot.homeX - dot.x
+      const dy = dot.homeY - dot.y
+      let fx = 0, fy = 0
+      for (const ball of this.balls) {
+        if (ball.stuck) continue
+        const bx = dot.x - ball.x
+        const by = dot.y - ball.y
+        const distSq = bx * bx + by * by
+        const hits = ball.backWallHits
+        const radius = 10 + hits * 4
+        const baseForce = 150 + hits * 120
+        if (distSq < radius * radius && distSq > 1) {
+          const dist = Math.sqrt(distSq)
+          const force = (1 - dist / radius) * baseForce
+          fx += (bx / dist) * force
+          fy += (by / dist) * force
+        }
+      }
+      dot.vx = (dot.vx + (dx * 8 + fx) * dt) * 0.95
+      dot.vy = (dot.vy + (dy * 8 + fy) * dt) * 0.95
+      dot.x += dot.vx * dt
+      dot.y += dot.vy * dt
     }
   }
 
@@ -708,7 +744,7 @@ export class Game {
       magnetOffsetX: 0,
       homingLeft: 0,
       homingCooldown: 0,
-      ghostLeft: 0, ghostPhasedBricks: new Set(),
+      ghostLeft: 0, ghostPhasedBricks: new Set(), bossImmunity: 0,
     })
   }
 
@@ -1090,10 +1126,285 @@ export class Game {
           this.endScores = saveHighScore(this.book.title, this.score)
           this.isNewHigh = this.score > 0 && this.score >= prevTop
         } else {
-          this.paragraphsCompleted++
-          this.openShop()
+          this.endGradeAdvance()
         }
       }
+      return
+    }
+
+    // Phase 3b: Boss intro — waiting for player to start fight
+    if (this.levelState === 'bossIntro') {
+      if (this.keysDown.has(' ') || this.keysDown.has('Enter')) {
+        this.startBossFight()
+      }
+      return
+    }
+
+    // Phase 3c: Boss fight — active boss battle
+    if (this.levelState === 'bossFight' && this.boss?.active) {
+      // Paddle movement during boss fight
+      if (this.mouseX >= 0) {
+        this.paddleTargetX = this.mouseX - this.paddleW / 2
+      }
+      const maxPadX = this.W - this.paddleW
+      this.paddleTargetX = Math.max(0, Math.min(maxPadX, this.paddleTargetX))
+      this.paddleX += (this.paddleTargetX - this.paddleX) * Math.min(1, 22.5 * dt)
+
+      // Paddle slam (vertical)
+      if (this.mouseDown && this.slamCooldown <= 0) {
+        this.paddleTargetY = this.paddleBaseY + 55
+        if (!this.slamActive) {
+          this.slamActive = true
+          this.launchBalls()
+        }
+      } else if (!this.mouseDown) {
+        this.paddleTargetY = this.paddleBaseY
+        this.slamActive = false
+      }
+      if (this.slamCooldown > 0) this.slamCooldown -= dt
+      // Paddle vertical movement
+      const yDiff = this.paddleTargetY - this.paddleY
+      if (Math.abs(yDiff) < 1) {
+        this.paddleY = this.paddleTargetY
+      } else {
+        this.paddleY += yDiff * Math.min(1, 18 * dt)
+      }
+      if (this.paddleY >= this.paddleBaseY + 55 - 1) {
+        this.slamWallTimer += dt
+      } else {
+        this.slamWallTimer = 0
+      }
+      this.prevPaddleY = this.paddleY
+
+      // Safety bar patrol
+      if (this.safetyHits > 0) {
+        this.safetyX += this.safetyDir * 100 * dt
+        if (this.safetyX + this.safetyW > this.W) { this.safetyX = this.W - this.safetyW; this.safetyDir = -1 }
+        if (this.safetyX < 0) { this.safetyX = 0; this.safetyDir = 1 }
+      }
+
+      // Ball physics — use updateBalls for wall/paddle/safety bouncing
+      const physState: PhysicsState = {
+        paddleX: this.paddleX, paddleW: this.paddleW,
+        paddleY: this.paddleY, paddleH: this.paddleH,
+        paddleBaseY: this.paddleBaseY, paddleExtentMax: 55,
+        W: this.W, H: this.H,
+        safetyX: this.safetyX, safetyW: this.safetyW,
+        safetyY: this.safetyY, safetyH: this.safetyH,
+        safetyHits: this.safetyHits,
+        paddleVy: this.paddleVy,
+        slamWallTimer: this.slamWallTimer,
+        slamActive: this.slamActive,
+        ballSpeed: this.ballSpeed,
+        bricksScrollY: 0,
+        magnetCharges: this.magnetCharges,
+        backWallActive: true,
+      }
+      const physEvents = updateBalls(this.balls, [], dt, physState)
+      for (const ev of physEvents) {
+        if (ev.type === 'ballLost') {
+          this.lives--
+          this.levelLivesLost++
+          this.balls.splice(ev.index, 1)
+          if (this.balls.length === 0) {
+            if (this.lives <= 0) {
+              this.gameOver = true
+              clearSave()
+              const prevTop = getHighScores(this.book.title)[0] ?? 0
+              this.endScores = saveHighScore(this.book.title, this.score)
+              this.isNewHigh = this.score > 0 && this.score >= prevTop
+            } else {
+              this.spawnBall()
+            }
+          }
+        } else if (ev.type === 'safetyHit') {
+          this.safetyHits--
+          this.measureSafety()
+        } else if (ev.type === 'magnetCatch') {
+          this.magnetCharges--
+        } else if (ev.type === 'backWallHit') {
+          this.particles.push(ev.particle)
+        } else if (ev.type === 'paddleSlam') {
+          const labels = ['', 'GOOD', 'GREAT!', 'PERFECT!!']
+          const colors = ['', '#4ade80', '#fbbf24', '#f87171']
+          if (ev.tier > 0) {
+            this.particles.push({
+              x: this.paddleX + this.paddleW / 2,
+              y: this.paddleY + this.paddleH + 20,
+              vx: 0, vy: 40,
+              char: labels[ev.tier],
+              life: 0.8, maxLife: 0.8,
+              color: colors[ev.tier],
+              size: 14 + ev.tier * 2,
+            })
+          }
+        }
+      }
+
+      // Homing cooldown tick + steer balls toward boss during fight
+      for (const ball of this.balls) { if (ball.homingCooldown > 0) ball.homingCooldown -= dt }
+      if (this.boss) {
+        for (const ball of this.balls) {
+          if (ball.stuck || ball.homingLeft <= 0 || ball.homingCooldown > 0) continue
+          const dx = this.boss.x - ball.x
+          const dy = this.boss.y - ball.y
+          const dist = Math.sqrt(dx * dx + dy * dy)
+          if (dist < 1) continue
+          const speed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy)
+          const steer = 3.5 * dt
+          ball.vx += (dx / dist) * speed * steer
+          ball.vy += (dy / dist) * speed * steer
+          // Normalize to preserve speed
+          const newSpeed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy)
+          if (newSpeed > 0) { ball.vx *= speed / newSpeed; ball.vy *= speed / newSpeed }
+        }
+      }
+
+      // Boss update — handles movement, shields, lasers, ball-boss collision
+      const bossEvents = updateBoss(
+        this.boss, dt, this.balls,
+        this.paddleX, this.paddleW, this.paddleY, this.paddleH,
+        this.safetyX, this.safetyW, this.safetyY, this.safetyH, this.safetyHits,
+        this.W, this.H,
+      )
+      for (const ev of bossEvents) {
+        if (ev.type === 'laserBlocked') {
+          // Shield flash — bright line across paddle at impact point
+          this.particles.push({
+            x: ev.x, y: ev.y,
+            vx: 0, vy: 0,
+            char: '===',
+            life: 0.2, maxLife: 0.25,
+            color: '#e8c44a',
+            size: 20,
+          })
+          // Red sparks spray upward from block point
+          for (let i = 0; i < 8; i++) {
+            const angle = -Math.PI / 2 + (Math.random() - 0.5) * 1.2
+            const speed = 80 + Math.random() * 160
+            this.particles.push({
+              x: ev.x + (Math.random() - 0.5) * 20, y: ev.y,
+              vx: Math.cos(angle) * speed,
+              vy: Math.sin(angle) * speed,
+              char: '*',
+              life: 0.3 + Math.random() * 0.2, maxLife: 0.5,
+              color: Math.random() > 0.5 ? '#ff4444' : '#e8c44a',
+              size: 14 + Math.random() * 6,
+            })
+          }
+          // Impact ring
+          this.particles.push({
+            x: ev.x, y: ev.y,
+            vx: 0, vy: 0,
+            char: 'o',
+            life: 0.25, maxLife: 0.3,
+            color: '#ff6644',
+            size: 24,
+          })
+        } else if (ev.type === 'laserPassedPaddle') {
+          this.lives--
+          this.levelLivesLost++
+          if (this.lives <= 0) {
+            this.gameOver = true
+            clearSave()
+            const prevTop = getHighScores(this.book.title)[0] ?? 0
+            this.endScores = saveHighScore(this.book.title, this.score)
+            this.isNewHigh = this.score > 0 && this.score >= prevTop
+          }
+        } else if (ev.type === 'bossHit') {
+          this.particles.push({
+            x: ev.x, y: ev.y,
+            vx: 0, vy: 30,
+            char: `-${ev.damage} HP`,
+            life: 0.8, maxLife: 0.8,
+            color: '#f87171',
+            size: 18,
+          })
+          // Charge fill on boss hit (0.1 per hit — ~10 hits to fill)
+          if (this.charge < 1.0) this.charge = Math.min(1.0, this.charge + 0.1)
+        } else if (ev.type === 'shieldHit') {
+          this.particles.push({
+            x: ev.x, y: ev.y,
+            vx: (Math.random() - 0.5) * 80,
+            vy: (Math.random() - 0.5) * 80,
+            char: '✦',
+            life: 0.5, maxLife: 0.5,
+            color: '#c084fc',
+            size: 14,
+          })
+          // Charge fill on shield hit (smaller — 0.05)
+          if (this.charge < 1.0) this.charge = Math.min(1.0, this.charge + 0.05)
+        } else if (ev.type === 'safetyHit') {
+          this.safetyHits--
+          this.measureSafety()
+          for (let i = 0; i < 3; i++) {
+            this.particles.push({
+              x: ev.x, y: ev.y,
+              vx: (Math.random() - 0.5) * 100,
+              vy: Math.random() * 40,
+              char: '·',
+              life: 0.3, maxLife: 0.3,
+              color: '#f87171',
+              size: 8,
+            })
+          }
+        } else if (ev.type === 'bossExplode') {
+          // Letter explosion — each char of CHAPTER flies outward
+          const letters = 'CHAPTER'
+          for (let i = 0; i < letters.length; i++) {
+            const angle = (i / letters.length) * Math.PI * 2 + Math.random() * 0.5
+            const speed = 150 + Math.random() * 200
+            this.particles.push({
+              x: ev.x, y: ev.y,
+              vx: Math.cos(angle) * speed,
+              vy: Math.sin(angle) * speed,
+              char: letters[i],
+              life: 2.0, maxLife: 2.0,
+              color: '#f87171',
+              size: 32 + Math.random() * 16,
+            })
+          }
+          // Spark burst
+          for (let i = 0; i < 20; i++) {
+            const angle = Math.random() * Math.PI * 2
+            const speed = 80 + Math.random() * 250
+            this.particles.push({
+              x: ev.x, y: ev.y,
+              vx: Math.cos(angle) * speed,
+              vy: Math.sin(angle) * speed,
+              char: '✦',
+              life: 1.0 + Math.random() * 0.5,
+              maxLife: 1.5,
+              color: ['#e8c44a', '#f87171', '#ff6040', '#fbbf24', '#c084fc'][Math.floor(Math.random() * 5)],
+              size: 8 + Math.random() * 10,
+            })
+          }
+          // Shield numeral explosion (if boss still has ref)
+          if (this.boss) {
+            for (const shield of this.boss.shields) {
+              const sx = this.boss.x + Math.cos(shield.angle) * shield.radius
+              const sy = this.boss.y + Math.sin(shield.angle) * shield.radius
+              const angle = Math.atan2(sy - this.boss.y, sx - this.boss.x)
+              this.particles.push({
+                x: sx, y: sy,
+                vx: Math.cos(angle) * 200,
+                vy: Math.sin(angle) * 200,
+                char: 'I',
+                life: 1.5, maxLife: 1.5,
+                color: '#c084fc',
+                size: 28,
+              })
+            }
+          }
+        } else if (ev.type === 'bossDead') {
+          this.endBossFight()
+        }
+      }
+
+      // Dot field + particles
+      this.updateDotField(dt)
+      this.tickParticlesAndFade(dt)
+      this.updateSidebar()
       return
     }
 
@@ -1402,7 +1713,7 @@ export class Game {
               vx: 0, vy: 0, r: this.ballR,
               trail: [], stuck: true,
               backWallHits: 0, slamStacks: 0,
-              blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0, ghostLeft: 0, ghostPhasedBricks: new Set(),
+              blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0, ghostLeft: 0, ghostPhasedBricks: new Set(), bossImmunity: 0,
             }]
           }
         }
@@ -1460,7 +1771,7 @@ export class Game {
             x: s.x, y: s.y, vx: 0, vy: 0, r: 3,
             trail: [], stuck: false,
             backWallHits: 0, slamStacks: 0,
-            blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0, ghostLeft: 0, ghostPhasedBricks: new Set(),
+            blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0, ghostLeft: 0, ghostPhasedBricks: new Set(), bossImmunity: 0,
           }
           this.hitBrick(brick, dummyBall)
           // Spark on impact
@@ -1503,32 +1814,7 @@ export class Game {
       }
     }
 
-    // Dot field physics — ball repulsion only (no paddle/safety bar)
-    for (const dot of this.dots) {
-      const dx = dot.homeX - dot.x
-      const dy = dot.homeY - dot.y
-      let fx = 0, fy = 0
-      for (const ball of this.balls) {
-        if (ball.stuck) continue
-        const bx = dot.x - ball.x
-        const by = dot.y - ball.y
-        const distSq = bx * bx + by * by
-        // Spread scales with back-wall speed stacks: subtle at base, big when boosted
-        const hits = ball.backWallHits
-        const radius = 10 + hits * 4       // 10px base → 50px at max stacks
-        const baseForce = 150 + hits * 120  // gentle base → strong when fast
-        if (distSq < radius * radius && distSq > 1) {
-          const dist = Math.sqrt(distSq)
-          const force = (1 - dist / radius) * baseForce
-          fx += (bx / dist) * force
-          fy += (by / dist) * force
-        }
-      }
-      dot.vx = (dot.vx + (dx * 8 + fx) * dt) * 0.95
-      dot.vy = (dot.vy + (dy * 8 + fy) * dt) * 0.95
-      dot.x += dot.vx * dt
-      dot.y += dot.vy * dt
-    }
+    this.updateDotField(dt)
 
     // Fade dead bricks
     for (const b of this.bricks) {
@@ -1676,6 +1962,7 @@ export class Game {
     this.particles = []
     this.levelWords = []
     this.levelState = 'playing'
+    this.boss = null
     this.grayPopBricks = []
     this.grayPopIdx = 0
     this.grayPopTimer = 0
@@ -1687,24 +1974,85 @@ export class Game {
     this.updateSidebar()
   }
 
-  // ── Shop ──────────────────────────────────────────────────────
-  private openShop() {
-    this.levelState = 'shop'
-    this.shopItems = generateShopItems(this.shopMaxedState(), this.book.difficulty)
+  // ── Boss fight ────────────────────────────────────────────────
 
-    // Responsive grid: 2 cols × 3 rows on mobile, 3 cols × 2 rows on desktop
+  /** Check if the current level is the last in this chapter (boss fight needed) */
+  private isChapterEnd(): boolean {
+    const chapter = this.book.chapters[this.chapterIdx]
+    const nextPara = this.paragraphIdx + this.levelParagraphCount
+    return nextPara >= chapter.paragraphs.length
+  }
+
+  /** Transition from endGrade to boss intro (or shop if not chapter end) */
+  private endGradeAdvance() {
+    this.paragraphsCompleted++
+    if (this.isChapterEnd() && !this.tutorial) {
+      this.startBossIntro()
+    } else {
+      this.openShop()
+    }
+  }
+
+  private startBossIntro() {
+    this.boss = createBoss(this.chapterIdx + 1, this.W, this.H, this.ctx)
+    this.levelState = 'bossIntro'
+  }
+
+  private startBossFight() {
+    if (!this.boss) return
+    this.boss.introActive = false
+    this.boss.active = true
+    this.levelState = 'bossFight'
+    // Re-stick all balls to paddle for boss fight launch
+    for (const ball of this.balls) {
+      ball.stuck = true
+      ball.trail = []
+      ball.backWallHits = 0
+      ball.slamStacks = 0
+    }
+    this.started = false
+  }
+
+  private endBossFight() {
+    if (!this.boss) return
+    // Award gold + time-based score bonus
+    this.gold += bossGoldReward(this.boss.chapter)
+    const bonus = bossScoreBonus(this.boss.fightTimer)
+    this.score += bonus
+    // Show score bonus particle
+    this.particles.push({
+      x: this.W / 2, y: this.H * 0.4,
+      vx: 0, vy: -30,
+      char: `BOSS DEFEATED! +${bonus.toLocaleString()}`,
+      life: 2.5, maxLife: 2.5,
+      color: '#e8c44a',
+      size: 22,
+    })
+    this.boss = null
+    this.openShop(true)  // post-boss shop has boosted rarity
+  }
+
+  // ── Shop ──────────────────────────────────────────────────────
+  private openShop(postBoss = false) {
+    this.levelState = 'shop'
+    this.shopItems = generateShopItems(this.shopMaxedState(), this.book.difficulty, postBoss)
+    this.layoutShop()
+    if (!this.tutorial) saveToStorage(this.getSaveState())
+  }
+
+  /** Compute shop grid rects from current screen size (no item regeneration) */
+  private layoutShop() {
     const narrow = this.W < 700
     const cols = narrow ? 2 : 3
     const rows = narrow ? 3 : 2
     const gapX = narrow ? 12 : 20
     const gapY = narrow ? 12 : 18
     const itemW = narrow
-      ? Math.floor((this.W - gapX * 3) / 2)     // fill width with margins
+      ? Math.floor((this.W - gapX * 3) / 2)
       : 210
     const itemH = narrow ? 105 : 120
     const gridW = cols * itemW + (cols - 1) * gapX
     const gridX = Math.floor((this.W - gridW) / 2)
-    // Clamp gridY so continue button (gridY + rows*(itemH+gapY) + 60) fits in H
     const totalGridH = rows * (itemH + gapY) + 60
     const idealGridY = narrow ? 260 : 370
     const gridY = Math.min(idealGridY, this.H - totalGridH - 40)
@@ -1727,7 +2075,15 @@ export class Game {
       w: btnW,
       h: 44,
     }
-    if (!this.tutorial) saveToStorage(this.getSaveState())
+    // Reroll button — between gold display and items
+    const rerollW = narrow ? 120 : 150
+    const rerollH = narrow ? 26 : 30
+    this.shopRerollRect = {
+      x: Math.floor(this.W / 2 - rerollW / 2),
+      y: gridY - (narrow ? 32 : 40),
+      w: rerollW,
+      h: rerollH,
+    }
   }
 
   private shopMaxedState() {
@@ -1735,6 +2091,18 @@ export class Game {
   }
 
   private handleShopClick(vx: number, vy: number) {
+    // Check reroll button
+    const rr = this.shopRerollRect
+    if (vx >= rr.x && vx <= rr.x + rr.w && vy >= rr.y && vy <= rr.y + rr.h) {
+      const cost = getRerollCost(this.book.difficulty)
+      if (this.gold >= cost) {
+        this.gold -= cost
+        this.shopItems = generateShopItems(this.shopMaxedState(), this.book.difficulty)
+        this.layoutShop()
+        if (!this.tutorial) saveToStorage(this.getSaveState())
+      }
+      return
+    }
     // Check shop items
     for (let i = 0; i < this.shopRects.length; i++) {
       const r = this.shopRects[i]
@@ -1772,7 +2140,7 @@ export class Game {
     const BLAST_TIERS = [0, 1, 2, 3, 4]
     const PIERCE_AMOUNTS = [0, 3, 6, 9, 12]
     const LUCKY_AMOUNTS = [0, 0.01, 0.02, 0.03, 0.05]
-    const BIGBALL_AMOUNTS = [0, 0.2, 0.4, 0.6, 0.8]
+    const BIGBALL_AMOUNTS = [0, 0.4, 0.8, 1.2, 1.6]
     const MAGNET_AMOUNTS = [0, 4, 6, 8, 12]
     const HOMING_AMOUNTS = [0, 4, 6, 8, 12]
 
@@ -1791,7 +2159,7 @@ export class Game {
           vx: 0, vy: 0, r: this.ballR,
           trail: [], stuck: true,
           backWallHits: 0, slamStacks: 0,
-          blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0, ghostLeft: 0, ghostPhasedBricks: new Set(),
+          blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0, ghostLeft: 0, ghostPhasedBricks: new Set(), bossImmunity: 0,
         })
       }
     } else if (id === 'safety') {
@@ -1806,7 +2174,7 @@ export class Game {
     } else if (id === 'lucky') {
       this.dropBonus += LUCKY_AMOUNTS[tier]
     } else if (id === 'bigball') {
-      this.ballSizeBonus = Math.min(1.0, this.ballSizeBonus + BIGBALL_AMOUNTS[tier])
+      this.ballSizeBonus = Math.min(2.0, this.ballSizeBonus + BIGBALL_AMOUNTS[tier])
       this.applyBallSize()
     } else if (id === 'magnet') {
       this.magnetCharges += MAGNET_AMOUNTS[tier]
@@ -1886,7 +2254,7 @@ export class Game {
         vx: 0, vy: 0, r: this.ballR,
         trail: [], stuck: true,
         backWallHits: 0, slamStacks: 0,
-        blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0, ghostLeft: 0, ghostPhasedBricks: new Set(),
+        blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0, ghostLeft: 0, ghostPhasedBricks: new Set(), bossImmunity: 0,
       }]
     } else {
       // Same chapter — carry over charge, multiball, pierce, blast, widen, safety
@@ -2007,15 +2375,22 @@ export class Game {
     sidebarEls.lives.textContent = livesStr
     sidebarEls.combo.textContent = comboStr
     sidebarEls.words.textContent = wordsStr
-    const chapter = this.book.chapters[this.chapterIdx]
-    const lastPara = Math.min(this.paragraphIdx + this.levelParagraphCount, chapter.paragraphs.length)
-    sidebarEls.chapterLabel.textContent = `Ch ${this.chapterIdx + 1}  ·  P${this.paragraphIdx + 1}-${lastPara}/${chapter.paragraphs.length}`
-    const bricksAlive = this.bricks.filter(b => b.alive).length
-    const paraBreaks = this.wordsInParagraph.slice(0, this.wordCursor).filter(w => w === Game.PARA_BREAK).length
-    const broken = (this.wordCursor - paraBreaks) - bricksAlive
-    const pct = this.totalWordsInParagraph > 0 ? Math.round((broken / this.totalWordsInParagraph) * 100) : 0
-    sidebarEls.progressBar.style.width = `${pct}%`
-    sidebarEls.progressText.textContent = `${pct}%`
+    if (this.levelState === 'bossFight' || this.levelState === 'bossIntro') {
+      sidebarEls.chapterLabel.textContent = this.boss ? `BOSS FIGHT  ·  HP ${this.boss.hp}/${this.boss.maxHp}` : 'BOSS FIGHT'
+      const bossPct = this.boss ? Math.round((1 - this.boss.hp / this.boss.maxHp) * 100) : 0
+      sidebarEls.progressBar.style.width = `${bossPct}%`
+      sidebarEls.progressText.textContent = `${bossPct}%`
+    } else {
+      const chapter = this.book.chapters[this.chapterIdx]
+      const lastPara = Math.min(this.paragraphIdx + this.levelParagraphCount, chapter.paragraphs.length)
+      sidebarEls.chapterLabel.textContent = `Ch ${this.chapterIdx + 1}  ·  P${this.paragraphIdx + 1}-${lastPara}/${chapter.paragraphs.length}`
+      const bricksAlive = this.bricks.filter(b => b.alive).length
+      const paraBreaks = this.wordsInParagraph.slice(0, this.wordCursor).filter(w => w === Game.PARA_BREAK).length
+      const broken = (this.wordCursor - paraBreaks) - bricksAlive
+      const pct = this.totalWordsInParagraph > 0 ? Math.round((broken / this.totalWordsInParagraph) * 100) : 0
+      sidebarEls.progressBar.style.width = `${pct}%`
+      sidebarEls.progressText.textContent = `${pct}%`
+    }
 
     // Mini stats strip (mobile) — abbreviate large numbers
     const ms = document.getElementById('mini-score')
@@ -2195,17 +2570,27 @@ export class Game {
       // Prompt
       if (this.endTimer > 1.0) {
         const isFail = isDead || this.endGrade === 'D' || this.endGrade === 'F'
-        const isShopNext = !isFail  // shop after every level now
+        const isBossNext = !isFail && this.isChapterEnd() && !this.tutorial
         const action = this.isMobile ? 'TAP' : 'CLICK or SPACE'
         let prompt: string
         if (isDead) prompt = `[ ${action} to continue ]`
         else if (isFail) prompt = `[ ${action} to restart ]`
-        else if (isShopNext) prompt = `[ ${action} to enter the shop ]`
-        else prompt = `[ ${action} to continue ]`
+        else if (isBossNext) prompt = `[ ${action} for boss fight ]`
+        else prompt = `[ ${action} to enter the shop ]`
         ctx.fillStyle = isFail ? '#f87171' : '#7dd3fc'
         ctx.font = `bold 14px 'JetBrains Mono', monospace`
         ctx.fillText(prompt, W / 2, H * 0.68)
       }
+    }
+
+    // Boss intro overlay
+    if (this.levelState === 'bossIntro' && this.boss) {
+      renderBoss(ctx, { boss: this.boss, isMobile: this.isMobile, W, H })
+    }
+
+    // Boss fight — render boss, shields, lasers in game field
+    if (this.levelState === 'bossFight' && this.boss) {
+      renderBoss(ctx, { boss: this.boss, isMobile: this.isMobile, W, H })
     }
 
     // Shop overlay
@@ -2214,6 +2599,8 @@ export class Game {
         shopItems: this.shopItems,
         shopRects: this.shopRects,
         shopContinueRect: this.shopContinueRect,
+        shopRerollRect: this.shopRerollRect,
+        rerollCost: getRerollCost(this.book.difficulty),
         gold: this.gold,
         particles: this.particles,
         isMobile: this.isMobile,
@@ -2296,6 +2683,7 @@ export class Game {
       levelWords: this.levelWords,
       levelLivesLost: this.levelLivesLost,
       brickHitThisLevel: this.brickHitThisLevel,
+      shopItems: this.levelState === 'shop' ? this.shopItems : undefined,
     }
   }
 
@@ -2386,7 +2774,16 @@ export class Game {
       this.slamCooldown = 0
 
       if (save.levelState === 'shop') {
-        this.openShop()
+        if (save.shopItems && save.shopItems.length > 0) {
+          this.levelState = 'shop'
+          this.shopItems = save.shopItems
+          this.layoutShop()
+        } else {
+          this.openShop()
+        }
+      } else if (save.levelState === 'bossIntro' || save.levelState === 'bossFight') {
+        // Restart boss intro on restore (boss state is transient)
+        this.startBossIntro()
       } else {
         this.levelState = save.levelState ?? 'playing'
       }
@@ -2397,6 +2794,8 @@ export class Game {
       this.spawnBall()
       if (save.levelState === 'shop') {
         this.openShop()
+      } else if (save.levelState === 'bossIntro' || save.levelState === 'bossFight') {
+        this.startBossIntro()
       } else {
         this.levelState = 'playing'
       }

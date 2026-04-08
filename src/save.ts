@@ -1,6 +1,6 @@
 // ── Save / Restore — localStorage persistence for game runs ──
 
-import type { Ball, Brick, Pickup } from './types'
+import type { Ball, Brick, Pickup, ShopItem } from './types'
 
 export interface SaveState {
   // Book/level position
@@ -8,7 +8,7 @@ export interface SaveState {
   chapterIdx: number
   paragraphIdx: number
   levelParagraphCount: number
-  levelState: 'playing' | 'grayCleanup' | 'endPopping' | 'endTally' | 'endGrade' | 'shop'
+  levelState: 'playing' | 'grayCleanup' | 'endPopping' | 'endTally' | 'endGrade' | 'bossIntro' | 'bossFight' | 'shop'
 
   // Scoring / progression
   score: number
@@ -52,6 +52,7 @@ export interface SaveState {
   levelWords: { word: string; color: string; points: number }[]
   levelLivesLost: number
   brickHitThisLevel: boolean
+  shopItems?: ShopItem[]  // preserved so shop can't be re-rolled on refresh
 }
 
 // Compact brick snapshot (skip dead bricks entirely)
@@ -84,6 +85,7 @@ interface BallSnap {
   hl: number   // homingLeft
   hc: number   // homingCooldown
   gl: number   // ghostLeft
+  bi: number   // bossImmunity
 }
 
 interface PickupSnap {
@@ -137,7 +139,7 @@ export function snapBall(b: Ball): BallSnap {
     stuck: b.stuck, bwh: b.backWallHits, ss: b.slamStacks,
     bc: b.blastCharge, pl: b.pierceLeft,
     ms: b.magnetSpeed, mi: b.magnetImmunity, mo: b.magnetOffsetX,
-    hl: b.homingLeft, hc: b.homingCooldown, gl: b.ghostLeft,
+    hl: b.homingLeft, hc: b.homingCooldown, gl: b.ghostLeft, bi: 0,
   }
 }
 
@@ -148,7 +150,7 @@ export function unsnapBall(s: BallSnap): Ball {
     backWallHits: s.bwh, slamStacks: s.ss,
     blastCharge: s.bc, pierceLeft: s.pl,
     magnetSpeed: s.ms, magnetImmunity: s.mi, magnetOffsetX: s.mo,
-    homingLeft: s.hl, homingCooldown: s.hc, ghostLeft: s.gl ?? 0,
+    homingLeft: s.hl, homingCooldown: s.hc, ghostLeft: s.gl ?? 0, bossImmunity: 0,
     ghostPhasedBricks: new Set(),
   }
 }

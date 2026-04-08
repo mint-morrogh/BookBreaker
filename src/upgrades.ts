@@ -72,7 +72,7 @@ export function activateUpgrade(pickup: Pickup, state: UpgradeState): UpgradeEve
             backWallHits: 0,
             slamStacks: 0,
             blastCharge: 0,
-            pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0, ghostLeft: 0, ghostPhasedBricks: new Set(),
+            pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0, ghostLeft: 0, ghostPhasedBricks: new Set(), bossImmunity: 0,
           })
         }
       } else {
@@ -92,13 +92,13 @@ export function activateUpgrade(pickup: Pickup, state: UpgradeState): UpgradeEve
             backWallHits: source.backWallHits,
             slamStacks: source.slamStacks,
             blastCharge: 0,
-            pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0, ghostLeft: 0, ghostPhasedBricks: new Set(),
+            pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0, ghostLeft: 0, ghostPhasedBricks: new Set(), bossImmunity: 0,
           })
         }
       }
     }
   } else if (pickup.type === 'bigball') {
-    state.ballSizeBonus = Math.min(1.0, state.ballSizeBonus + pickup.tier * 0.1)
+    state.ballSizeBonus = Math.min(2.0, state.ballSizeBonus + pickup.tier * 0.2)
     events.push({ type: 'applyBallSize' })
   } else if (pickup.type === 'magnet') {
     const charges = 4 + (pickup.tier - 1) * 2  // tier 1=4, 2=6, 3=8, 4=10
@@ -341,7 +341,7 @@ export function hitBrick(brick: Brick, ball: Ball, state: UpgradeState): void {
     ]
     if (state.widenLevel < state.maxWiden) dropPool.push({ type: 'widen', weight: 0.22 })
     if (state.safetyHits < state.maxSafety) dropPool.push({ type: 'safety', weight: 0.15 })
-    if (state.ballSizeBonus < 1.0) dropPool.push({ type: 'bigball', weight: 0.12 })
+    if (state.ballSizeBonus < 2.0) dropPool.push({ type: 'bigball', weight: 0.12 })
     dropPool.push({ type: 'magnet', weight: 0.14 })
     dropPool.push({ type: 'homing', weight: 0.10 })
     dropPool.push({ type: 'ghost', weight: 0.10 })

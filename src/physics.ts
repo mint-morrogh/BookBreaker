@@ -79,14 +79,15 @@ export function updateBalls(
     if (ball.y + ball.r > state.H) {
       ball.y = state.H - ball.r
       ball.vy = -Math.abs(ball.vy)
-      if (state.backWallActive && ball.backWallHits < 10) {
+      if (state.backWallActive && ball.backWallHits < 13) {
         ball.backWallHits++
-        // 1.05x speed boost per hit (10 hits → ~1.63x total)
+        // 1.05x speed boost per hit (13 hits → ~1.89x total)
         ball.vx *= 1.05
         ball.vy *= 1.05
         // Popup text
         const msgs = ['BACK WALL!', 'SPEED UP!', 'DANGER ZONE!', 'RISKY!', 'BLAZING!',
-          'ON FIRE!', 'UNSTOPPABLE!', 'LUDICROUS!', 'MAXIMUM!', 'OVERDRIVE!']
+          'ON FIRE!', 'UNSTOPPABLE!', 'LUDICROUS!', 'MAXIMUM!', 'OVERDRIVE!',
+          'BEYOND!', 'TRANSCENDENT!', 'GODSPEED!']
         events.push({
           type: 'backWallHit',
           ball,
@@ -203,7 +204,7 @@ export function updateBalls(
           ball.pierceLeft = Math.max(ball.pierceLeft, slamPierce)
 
           // Slam speed boost — 1.05x per tier, symmetrical with decay
-          const newStacks = Math.min(10, ball.slamStacks + slamTier)
+          const newStacks = Math.min(13, ball.slamStacks + slamTier)
           const stacksAdded = newStacks - ball.slamStacks
           ball.slamStacks = newStacks
           for (let s = 0; s < stacksAdded; s++) {

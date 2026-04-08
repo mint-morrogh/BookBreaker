@@ -36,6 +36,7 @@ export interface Ball {
   homingCooldown: number // seconds of free movement after a homing hit before re-engaging
   ghostLeft: number     // remaining ghost phases (0 = normal, >0 = phase through bricks without bouncing)
   ghostPhasedBricks: Set<Brick>  // bricks already phased through (each brick only costs 1 charge)
+  bossImmunity: number  // seconds of immunity to boss damage after hitting boss (prevents multi-hit)
 }
 
 export interface Particle {

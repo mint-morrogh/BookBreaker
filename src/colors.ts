@@ -70,19 +70,22 @@ export const DOT_COLORS = [
   '#2a2e35', '#2b2f36', '#2c3037', '#2d3138', '#2e3239', '#2f333a',
 ]
 
-// Ball color ramps based on backWallHits (11 steps, 0-10)
-// Gradual yellow → orange by midpoint → deep red at max
+// Ball color ramps based on speed stacks (14 steps, 0-13)
+// Gradual yellow → orange → red → white-hot at max
 export const BALL_COLORS = [
   '#e8c44a',  // 0  gold yellow
-  '#e8b442',  // 1  warm yellow
-  '#e8a038',  // 2  yellow-orange
-  '#e88c30',  // 3  light orange
-  '#e87828',  // 4  orange
-  '#e86020',  // 5  deep orange (midpoint)
-  '#e84c1c',  // 6  orange-red
-  '#e03818',  // 7  red-orange
-  '#d82816',  // 8  medium red
-  '#d01c14',  // 9  deep red
-  '#c81010',  // 10 max red
+  '#e8b844',  // 1  warm yellow
+  '#e8ac3e',  // 2  yellow-gold
+  '#e89c36',  // 3  yellow-orange
+  '#e88c30',  // 4  light orange
+  '#e87828',  // 5  orange
+  '#e86420',  // 6  deep orange
+  '#e84c1c',  // 7  orange-red
+  '#e03818',  // 8  red-orange
+  '#d82816',  // 9  medium red
+  '#d01c14',  // 10 deep red
+  '#c81010',  // 11 bright red
+  '#e03030',  // 12 hot red
+  '#f05050',  // 13 white-hot red
 ]
 

@@ -13,8 +13,15 @@ export const RARITY_COLORS: Record<ShopRarity, string> = {
 const RARITY_LABELS: Record<ShopRarity, string> = {
   common: 'COMMON', uncommon: 'UNCOMMON', rare: 'RARE', epic: 'EPIC',
 }
-function rollRarity(): ShopRarity {
+function rollRarity(postBoss = false): ShopRarity {
   const r = Math.random()
+  if (postBoss) {
+    // Post-boss shop: much higher rare/epic rates
+    if (r < 0.15) return 'common'
+    if (r < 0.40) return 'uncommon'
+    if (r < 0.75) return 'rare'
+    return 'epic'
+  }
   if (r < 0.45) return 'common'
   if (r < 0.75) return 'uncommon'
   if (r < 0.93) return 'rare'
@@ -58,7 +65,7 @@ export const SHOP_POOL: ShopPoolEntry[] = [
     tierDescs: ['Drop chance +1%', 'Drop chance +2%', 'Drop chance +3%', 'Drop chance +5%'] },
   { id: 'bigball', basePrice: 100,
     tierNames: ['BIG BALL', 'BIG BALL +', 'BIG BALL ++', 'BIG BALL +++'],
-    tierDescs: ['Ball size +20%', 'Ball size +40%', 'Ball size +60%', 'Ball size +80%'] },
+    tierDescs: ['Ball size +40%', 'Ball size +80%', 'Ball size +120%', 'Ball size +160%'] },
   { id: 'magnet', basePrice: 80,
     tierNames: ['MAGNET x4', 'MAGNET x6', 'MAGNET x8', 'MAGNET x12'],
     tierDescs: ['4 magnetic catches', '6 magnetic catches', '8 magnetic catches', '12 magnetic catches'] },
@@ -84,7 +91,7 @@ export interface ShopMaxedState {
 export function isShopItemMaxed(id: string, state: ShopMaxedState): boolean {
   if (id === 'widen') return state.widenLevel >= state.maxWiden
   if (id === 'safety') return state.safetyHits >= state.maxSafety
-  if (id === 'bigball') return state.ballSizeBonus >= 1.0
+  if (id === 'bigball') return state.ballSizeBonus >= 2.0
   return false
 }
 
@@ -93,14 +100,20 @@ const DIFFICULTY_PRICE: Record<string, number> = {
   'Tutorial': 1.0, 'Easy': 1.0, 'Medium': 1.4, 'Hard': 1.9, 'Very Hard': 2.5, 'Custom': 1.2,
 }
 
-export function generateShopItems(state: ShopMaxedState, difficulty?: string): ShopItem[] {
+const REROLL_BASE_COST = 150
+
+export function getRerollCost(difficulty?: string): number {
+  return Math.round(REROLL_BASE_COST * (DIFFICULTY_PRICE[difficulty ?? 'Easy'] ?? 1.0))
+}
+
+export function generateShopItems(state: ShopMaxedState, difficulty?: string, postBoss = false): ShopItem[] {
   const diffMult = DIFFICULTY_PRICE[difficulty ?? 'Easy'] ?? 1.0
   const lifeOpts = SHOP_POOL.filter(s => s.isLife)
   const others = SHOP_POOL.filter(s => !s.isLife && !isShopItemMaxed(s.id, state))
   const picked: ShopItem[] = []
 
   const toShopItem = (entry: ShopPoolEntry, maxed = false): ShopItem => {
-    const rarity = rollRarity()
+    const rarity = rollRarity(postBoss)
     const tier = RARITY_TIER[rarity]  // 1-4
     const ti = tier - 1               // 0-3 index
     return {
@@ -128,6 +141,8 @@ export interface ShopRenderState {
   shopItems: ShopItem[]
   shopRects: { x: number; y: number; w: number; h: number }[]
   shopContinueRect: { x: number; y: number; w: number; h: number }
+  shopRerollRect: { x: number; y: number; w: number; h: number }
+  rerollCost: number
   gold: number
   particles: Particle[]
   isMobile: boolean
@@ -189,8 +204,21 @@ export function renderShop(ctx: CanvasRenderingContext2D, W: number, H: number, 
   ctx.fillText(`◆ ${state.gold}`, W / 2, goldY)
   ctx.shadowBlur = 0
 
+  // Reroll button
+  const rr = state.shopRerollRect
+  const canReroll = state.gold >= state.rerollCost
+  ctx.fillStyle = canReroll ? '#0c1018' : '#080a10'
+  ctx.strokeStyle = canReroll ? '#4a5568' : '#1a2030'
+  ctx.lineWidth = 1
+  roundRect(ctx, rr.x, rr.y, rr.w, rr.h, 4)
+  ctx.fill()
+  ctx.stroke()
+  ctx.font = `bold ${narrow ? 10 : 12}px 'JetBrains Mono', monospace`
+  ctx.fillStyle = canReroll ? '#6b7280' : '#2a3040'
+  ctx.fillText(`REROLL  ◆${state.rerollCost}`, rr.x + rr.w / 2, rr.y + rr.h / 2)
+
   // Hint
-  const hintY = firstR.y - (narrow ? 22 : 28)
+  const hintY = firstR.y - (narrow ? 12 : 16)
   ctx.fillStyle = '#374151'
   ctx.font = `${narrow ? 9 : 11}px 'JetBrains Mono', monospace`
   ctx.fillText(narrow ? 'tap to buy · tap CONTINUE to skip' : 'click to purchase  ·  SPACE to continue', W / 2, hintY)
