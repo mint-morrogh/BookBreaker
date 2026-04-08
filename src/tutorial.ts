@@ -13,6 +13,7 @@ export interface TutorialPhase {
   breakoffsEnabled: boolean
   coloredBricks: boolean     // force all bricks to be colored (no gray)
   goToShopAfter: boolean
+  giveRecall?: boolean       // auto-fill charge meter at phase start
 }
 
 export const TUTORIAL_PHASES: TutorialPhase[] = [
@@ -28,7 +29,18 @@ export const TUTORIAL_PHASES: TutorialPhase[] = [
     coloredBricks: false,
     goToShopAfter: false,
   },
-  // Phase 1: Slam / speed
+  // Phase 1: Recall — auto-filled charge, let them try it
+  {
+    text: 'Break bricks to charge your recall ability. Your meter is full, go on try it!',
+    largeBricks: true,
+    dropsEnabled: false,
+    forceDrops: false,
+    breakoffsEnabled: false,
+    coloredBricks: false,
+    goToShopAfter: false,
+    giveRecall: true,
+  },
+  // Phase 2: Slam / speed
   {
     text: 'Increase the speed of your ball by clicking at the right time. The more precise, the higher speed and piercing effect!',
     mobileText: 'Increase the speed of your ball by tapping at the right time. The more precise, the higher speed and piercing effect!',

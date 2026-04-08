@@ -35,7 +35,7 @@ interface ShopPoolEntry {
   tierDescs: [string, string, string, string]
 }
 export const SHOP_POOL: ShopPoolEntry[] = [
-  { id: 'life', basePrice: 100, isLife: true,
+  { id: 'life', basePrice: 300, isLife: true,
     tierNames: ['+1 LIFE', '+2 LIVES', '+3 LIVES', '+5 LIVES'],
     tierDescs: ['Extra life', 'Two extra lives', 'Three extra lives', 'Five extra lives'] },
   { id: 'widen', basePrice: 80,

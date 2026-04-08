@@ -46,10 +46,15 @@ export function updateBalls(
   let stuckIdx = 0
   for (const ball of balls) {
     if (ball.stuck) {
-      // Spread stuck balls side-by-side across paddle
-      const spacing = Math.min(20, state.paddleW / (stuckBalls.length + 1))
-      const offset = (stuckIdx - (stuckBalls.length - 1) / 2) * spacing
-      ball.x = state.paddleX + state.paddleW / 2 + offset
+      if (ball.magnetSpeed > 0) {
+        // Magnet-caught: hold at catch offset, follow paddle
+        ball.x = state.paddleX + state.paddleW / 2 + ball.magnetOffsetX
+      } else {
+        // Normal stuck: spread side-by-side across paddle center
+        const spacing = Math.min(20, state.paddleW / (stuckBalls.length + 1))
+        const offset = (stuckIdx - (stuckBalls.length - 1) / 2) * spacing
+        ball.x = state.paddleX + state.paddleW / 2 + offset
+      }
       ball.y = state.paddleY + state.paddleH + ball.r + 2
       stuckIdx++
       continue
@@ -137,6 +142,10 @@ export function updateBalls(
       // Magnet catch: only when paddle is at rest (not slamming), preserves momentum
       if (state.magnetCharges > 0 && ball.magnetImmunity <= 0 && !state.slamActive) {
         ball.magnetSpeed = postShedSpeed
+        ball.magnetOffsetX = ball.x - (state.paddleX + state.paddleW / 2)
+        // Clamp so ball doesn't hang off the paddle edge
+        const maxOff = state.paddleW / 2 - ball.r
+        ball.magnetOffsetX = Math.max(-maxOff, Math.min(maxOff, ball.magnetOffsetX))
         ball.stuck = true
         ball.vx = 0
         ball.vy = 0

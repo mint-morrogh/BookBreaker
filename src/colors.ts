@@ -3,7 +3,7 @@ import type { UpgradeType } from './types'
 
 // ── Word color by NLP tag ───────────────────────────────────────
 export const TAG_COLORS: Record<WordTag, string> = {
-  stopword:  '#555d6a',  // gray
+  stopword:  '#7a8394',  // gray (lighter — readable words)
   noun:      '#7dd3fc',  // cyan
   adverb:    '#4ade80',  // green
   verb:      '#fbbf24',  // amber
@@ -14,7 +14,7 @@ export const TAG_COLORS: Record<WordTag, string> = {
 }
 
 // Punctuation brick color — lighter gray, distinct from stopwords
-export const PUNCTUATION_COLOR = '#7a8394'
+export const PUNCTUATION_COLOR = '#555d6a'
 
 // Active tag map — set when a book is loaded
 let activeTagMap: Map<string, WordTag> = new Map()

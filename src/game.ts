@@ -12,7 +12,7 @@ import { activateUpgrade as runActivateUpgrade, hitBrick as runHitBrick, type Up
 import { renderGame, type RenderState } from './render-game'
 import { generateShopItems, isShopItemMaxed, renderShop, type ShopRenderState } from './shop'
 import { detectIslands, updateIslandGroups, type IslandGroup } from './islands'
-import { saveToStorage, loadFromStorage, clearSave, type SaveState } from './save'
+import { saveToStorage, loadFromStorage, clearSave, snapBrick, unsnapBrick, snapBall, unsnapBall, snapPickup, unsnapPickup, type SaveState } from './save'
 import { TutorialController, markTutorialDone } from './tutorial'
 
 // ── Upgrade caps ──────────────────────────────────────────────
@@ -156,7 +156,7 @@ export class Game {
   private isMobile = false
   private moveTouchId: number | null = null
   private slamTouchId: number | null = null
-  private recallBtn: HTMLElement | null = null
+  private touchStarts = new Map<number, { x: number; y: number; t: number }>()  // swipe-up tracking
 
   // state
   private started = false
@@ -265,22 +265,7 @@ export class Game {
       }
     })
 
-    // ── Touch controls (mobile) — multi-touch ───────────────────
-    this.recallBtn = document.getElementById('recall-btn')
-
-    // Recall button (works on both mobile and desktop)
-    if (this.recallBtn) {
-      const doRecall = (e: Event) => {
-        e.preventDefault()
-        e.stopPropagation()
-        if (this.charge >= 1.0 && this.balls.some(b => !b.stuck)) {
-          this.recallBall()
-        }
-      }
-      this.recallBtn.addEventListener('touchstart', doRecall)
-      this.recallBtn.addEventListener('click', doRecall)
-    }
-
+    // ── Touch controls (mobile) — multi-touch + swipe-up recall ──
     this.canvas.addEventListener('touchstart', (e) => {
       e.preventDefault()
 
@@ -327,6 +312,9 @@ export class Game {
         const rect = this.canvas.getBoundingClientRect()
         const vx = (touch.clientX - rect.left) / rect.width * this.W
 
+        // Track start position for swipe-up recall detection
+        this.touchStarts.set(touch.identifier, { x: touch.clientX, y: touch.clientY, t: performance.now() })
+
         if (this.moveTouchId === null) {
           // First finger — paddle movement only
           this.moveTouchId = touch.identifier
@@ -353,6 +341,20 @@ export class Game {
     const handleTouchEnd = (e: TouchEvent) => {
       for (let i = 0; i < e.changedTouches.length; i++) {
         const touch = e.changedTouches[i]
+
+        // Swipe-up recall: fast upward flick on any finger
+        const start = this.touchStarts.get(touch.identifier)
+        if (start) {
+          this.touchStarts.delete(touch.identifier)
+          const dy = start.y - touch.clientY  // positive = upward
+          const dx = Math.abs(touch.clientX - start.x)
+          const dt = performance.now() - start.t
+          // Require: >60px upward, <300ms, mostly vertical (dy > dx)
+          if (dy > 60 && dy > dx && dt < 300 && this.charge >= 1.0 && this.balls.some(b => !b.stuck)) {
+            this.recallBall()
+          }
+        }
+
         if (touch.identifier === this.moveTouchId) {
           this.moveTouchId = null
         } else if (touch.identifier === this.slamTouchId) {
@@ -368,11 +370,18 @@ export class Game {
     window.addEventListener('touchcancel', handleTouchEnd)
 
     // Pause on any focus loss — tab switch, app switch, etc.
+    // Also snapshot state so continue-run restores exactly here
     window.addEventListener('blur', () => {
-      if (!this.gameOver) this.paused = true
+      if (!this.gameOver) {
+        this.paused = true
+        if (!this.tutorial) saveToStorage(this.getSaveState())
+      }
     })
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden && !this.gameOver) this.paused = true
+      if (document.hidden && !this.gameOver) {
+        this.paused = true
+        if (!this.tutorial) saveToStorage(this.getSaveState())
+      }
     })
   }
 
@@ -559,6 +568,11 @@ export class Game {
     this.nextIslandId = 1
     // Spawn enough rows to fill from start to well below the screen
     this.spawnBrickRows(30, this.H * 0.70)
+
+    // Tutorial: auto-fill charge for recall demo phase
+    if (this.tutorial?.currentPhase?.giveRecall) {
+      this.charge = 1.0
+    }
   }
 
   private spawnBrickRows(rowCount: number, startWorldY?: number) {
@@ -692,6 +706,7 @@ export class Game {
       pierceLeft: 0,
       magnetSpeed: 0,
       magnetImmunity: 0,
+      magnetOffsetX: 0,
       homingLeft: 0,
       homingCooldown: 0,
     })
@@ -757,6 +772,86 @@ export class Game {
       }
     }
     return best
+  }
+
+  /** Spawn break visual effects (sparks, corners, edges, ring) for a brick */
+  private spawnBreakFx(brick: Brick, brickScreenY: number) {
+    const cx = brick.x + brick.w / 2
+    const cy = brickScreenY + brick.h / 2
+    const combo = this.multiplier
+    const comboT = Math.min(1, (combo - 1) / 6)
+
+    // Spark dots
+    const sparkCount = 4 + Math.floor(comboT * 5)
+    const sparkSpeed = 80 + comboT * 100
+    for (let i = 0; i < sparkCount; i++) {
+      const angle = (i / sparkCount) * Math.PI * 2 + Math.random() * 0.8
+      const speed = sparkSpeed + Math.random() * 120
+      this.particles.push({
+        x: cx + (Math.random() - 0.5) * brick.w * 0.4,
+        y: cy + (Math.random() - 0.5) * brick.h * 0.3,
+        vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+        char: '*', life: 0.3 + Math.random() * 0.2, maxLife: 0.5,
+        color: brick.color, size: 14 + Math.random() * 4 + comboT * 4,
+      })
+    }
+
+    // Corner fragments
+    if (combo >= 2) {
+      const corners = [
+        { x: brick.x, y: brickScreenY, vx: -1, vy: -1 },
+        { x: brick.x + brick.w, y: brickScreenY, vx: 1, vy: -1 },
+        { x: brick.x, y: brickScreenY + brick.h, vx: -1, vy: 1 },
+        { x: brick.x + brick.w, y: brickScreenY + brick.h, vx: 1, vy: 1 },
+      ]
+      const cSpeed = 40 + comboT * 80
+      for (const c of corners) {
+        if (Math.random() > 0.4 + comboT * 0.3) continue
+        this.particles.push({
+          x: c.x, y: c.y,
+          vx: c.vx * cSpeed + (Math.random() - 0.5) * 30,
+          vy: c.vy * cSpeed + (Math.random() - 0.5) * 30,
+          char: '+', life: 0.4 + comboT * 0.3, maxLife: 0.8,
+          color: brick.color, size: 16 + comboT * 4,
+        })
+      }
+    }
+
+    // Edge fragments
+    if (combo >= 4) {
+      const edgeCount = 2 + Math.floor(comboT * 3)
+      for (let i = 0; i < edgeCount; i++) {
+        const ch = Math.random() > 0.5 ? '-' : '|'
+        const ex = ch === '-' ? brick.x + Math.random() * brick.w
+          : (Math.random() > 0.5 ? brick.x : brick.x + brick.w)
+        const ey = ch === '-' ? (Math.random() > 0.5 ? brickScreenY : brickScreenY + brick.h)
+          : brickScreenY + Math.random() * brick.h
+        const eAngle = Math.atan2(ey - cy, ex - cx) + (Math.random() - 0.5) * 0.5
+        const eSpeed = 60 + Math.random() * 80
+        this.particles.push({
+          x: ex, y: ey,
+          vx: Math.cos(eAngle) * eSpeed, vy: Math.sin(eAngle) * eSpeed,
+          char: ch, life: 0.3 + Math.random() * 0.2, maxLife: 0.6,
+          color: brick.color, size: 16 + comboT * 4,
+        })
+      }
+    }
+
+    // Ring at high combo
+    if (combo >= 6) {
+      this.particles.push({
+        x: cx, y: cy, vx: 0, vy: 0,
+        char: 'o', life: 0.35, maxLife: 0.4,
+        color: brick.color, size: 28 + comboT * 16,
+      })
+    }
+
+    // White flash
+    this.particles.push({
+      x: cx, y: cy, vx: 0, vy: 0,
+      char: '*', life: 0.15 + comboT * 0.05, maxLife: 0.25,
+      color: '#ffffff', size: 18 + brick.word.length * 0.5 + comboT * 8,
+    })
   }
 
   private recallBall() {
@@ -1127,6 +1222,8 @@ export class Game {
               char: b.word[i], life: 1.0, maxLife: 1.2, color: b.color, size: 16,
             })
           }
+          // Break visual effects (sparks, corners, etc.)
+          if (b.word) this.spawnBreakFx(b, bsy)
           const bTier = colorTier(b.color)
           const goldAmt = bTier <= 0 ? 0 : bTier === 1 ? 2 : bTier === 2 ? 3 : bTier === 3 ? 5 : 8
           if (goldAmt > 0) {
@@ -1306,7 +1403,7 @@ export class Game {
               vx: 0, vy: 0, r: this.ballR,
               trail: [], stuck: true,
               backWallHits: 0, slamStacks: 0,
-              blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, homingLeft: 0, homingCooldown: 0,
+              blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0,
             }]
           }
         }
@@ -1338,14 +1435,19 @@ export class Game {
       }
     }
 
-    // Shrapnel — blast projectiles that fly until hitting a brick or leaving screen
+    // Shrapnel — blast projectiles that bounce off walls, die at bottom or on brick hit
     for (let i = this.shrapnel.length - 1; i >= 0; i--) {
       const s = this.shrapnel[i]
       s.x += s.vx * dt
       s.y += s.vy * dt
       s.vy += 350 * dt  // heavy gravity — arcs down into bricks below
-      // Only die when off-screen (all 4 edges)
-      if (s.x < -20 || s.x > this.W + 20 || s.y < -20 || s.y > this.H + 20) {
+      // Bounce off side walls
+      if (s.x < 0) { s.x = 0; s.vx = Math.abs(s.vx) }
+      if (s.x > this.W) { s.x = this.W; s.vx = -Math.abs(s.vx) }
+      // Bounce off top
+      if (s.y < 0) { s.y = 0; s.vy = Math.abs(s.vy) }
+      // Die when past the bottom
+      if (s.y > this.H + 20) {
         this.shrapnel.splice(i, 1)
         continue
       }
@@ -1359,7 +1461,7 @@ export class Game {
             x: s.x, y: s.y, vx: 0, vy: 0, r: 3,
             trail: [], stuck: false,
             backWallHits: 0, slamStacks: 0,
-            blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, homingLeft: 0, homingCooldown: 0,
+            blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0,
           }
           this.hitBrick(brick, dummyBall)
           // Spark on impact
@@ -1690,7 +1792,7 @@ export class Game {
           vx: 0, vy: 0, r: this.ballR,
           trail: [], stuck: true,
           backWallHits: 0, slamStacks: 0,
-          blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, homingLeft: 0, homingCooldown: 0,
+          blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0,
         })
       }
     } else if (id === 'safety') {
@@ -1782,7 +1884,7 @@ export class Game {
         vx: 0, vy: 0, r: this.ballR,
         trail: [], stuck: true,
         backWallHits: 0, slamStacks: 0,
-        blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, homingLeft: 0, homingCooldown: 0,
+        blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0,
       }]
     } else {
       // Same chapter — carry over charge, multiball, pierce, blast, widen, safety
@@ -1924,11 +2026,6 @@ export class Game {
       document.getElementById('mini-gold')!.textContent = String(this.gold)
     }
 
-    // Recall button visibility
-    if (this.recallBtn) {
-      const showRecall = this.charge >= 1.0 && this.balls.some(b => !b.stuck) && this.levelState === 'playing'
-      this.recallBtn.style.display = showRecall ? 'block' : 'none'
-    }
   }
 
   // ── Render ──────────────────────────────────────────────────
@@ -2145,69 +2242,155 @@ export class Game {
 
     // Pause overlay
     if (this.paused) {
-      renderPause(ctx, W, H)
+      renderPause(ctx, W, H, this.isMobile)
     }
 
   }
 
   // ── Save / Restore ───────────────────────────────────────────
-  getSaveState() {
+  getSaveState(): SaveState {
     return {
       bookIdx: this._bookIdx,
       chapterIdx: this.chapterIdx,
       paragraphIdx: this.paragraphIdx,
+      levelParagraphCount: this.levelParagraphCount,
+      levelState: this.levelState,
       score: this.score,
       lives: this.lives,
       gold: this.gold,
       paragraphsCompleted: this.paragraphsCompleted,
+      wordsBroken: this.wordsBroken,
+      letterCounts: { ...this.letterCounts },
+      alphabetCompletions: this.alphabetCompletions,
+      nextLifeScore: this.nextLifeScore,
+      multiplier: this.multiplier,
+      charge: this.charge,
       dropBonus: this.dropBonus,
       widenLevel: this.widenLevel,
       safetyHits: this.safetyHits,
-      wordsBroken: this.wordsBroken,
-      letterCounts: this.letterCounts,
-      alphabetCompletions: this.alphabetCompletions,
-      nextLifeScore: this.nextLifeScore,
-      levelState: this.levelState,
       ballSizeBonus: this.ballSizeBonus,
       magnetCharges: this.magnetCharges,
+      // Mid-level snapshot
+      bricks: this.bricks.filter(b => b.alive).map(snapBrick),
+      balls: this.balls.map(snapBall),
+      pickups: this.pickups.map(snapPickup),
+      bricksScrollY: this.bricksScrollY,
+      wordCursor: this.wordCursor,
+      totalWordsInParagraph: this.totalWordsInParagraph,
+      levelBasePoints: this.levelBasePoints,
+      started: this.started,
+      hasLaunched: this.hasLaunched,
+      hasRecalled: this.hasRecalled,
+      backWallActive: this.backWallActive,
+      backWallReveal: this.backWallReveal,
+      freezeTimer: this.freezeTimer,
+      bricksDriftSpeed: this.bricksDriftSpeed,
+      paddleX: this.paddleX,
+      paddleW: this.paddleW,
+      paddleText: this.paddleText,
+      safetyX: this.safetyX,
+      safetyDir: this.safetyDir,
+      levelWords: this.levelWords,
+      levelLivesLost: this.levelLivesLost,
+      brickHitThisLevel: this.brickHitThisLevel,
     }
   }
 
-  restoreFromSave(save: ReturnType<Game['getSaveState']>) {
+  restoreFromSave(save: SaveState) {
+    // Book/level position
     this.chapterIdx = save.chapterIdx
     this.paragraphIdx = save.paragraphIdx
+    this.levelParagraphCount = save.levelParagraphCount ?? 1
+
+    // Scoring / progression
     this.score = save.score
     this.lives = save.lives
     this.gold = save.gold
     this.paragraphsCompleted = save.paragraphsCompleted
-    this.dropBonus = save.dropBonus
-    this.widenLevel = save.widenLevel
-    this.safetyHits = save.safetyHits
     this.wordsBroken = save.wordsBroken
     this.letterCounts = save.letterCounts
     this.alphabetCompletions = save.alphabetCompletions
     this.nextLifeScore = save.nextLifeScore
+    this.multiplier = save.multiplier ?? 1.0
+    this.charge = save.charge ?? 0
+
+    // Upgrades
+    this.dropBonus = save.dropBonus
+    this.widenLevel = save.widenLevel
+    this.safetyHits = save.safetyHits
     this.ballSizeBonus = save.ballSizeBonus ?? 0
     this.magnetCharges = save.magnetCharges ?? 0
-    // Restore paddle width
-    if (this.widenLevel > 0) {
-      const equals = '═'.repeat(this.widenLevel)
-      this.paddleText = `${equals} BOOK BREAKER ${equals}`
-      this.measurePaddle()
-    }
-    // Restore safety bar
+
+    // Paddle
+    this.paddleText = save.paddleText ?? 'BOOK BREAKER'
+    this.measurePaddle()
+    this.paddleX = save.paddleX ?? this.W / 2 - this.paddleW / 2
+    this.paddleTargetX = this.paddleX
+
+    // Safety bar
     if (this.safetyHits > 0) this.measureSafety()
-    // Load the correct paragraph
-    this.loadParagraph(this.chapterIdx, this.paragraphIdx)
-    this.balls = []
-    this.spawnBall()
-    // If save was at shop, reopen it
-    if (save.levelState === 'shop') {
-      this.openShop()
+    this.safetyX = save.safetyX ?? this.W / 2 - this.safetyW / 2
+    this.safetyDir = save.safetyDir ?? 1
+
+    // Mid-level snapshot — if present, restore exact state; otherwise fall back to level reload
+    if (save.bricks && save.bricks.length > 0) {
+      // Rebuild word list (needed for wordCursor tracking, not for bricks)
+      const chapter = this.book.chapters[this.chapterIdx]
+      const words: string[] = []
+      const count = Math.min(this.levelParagraphCount, chapter.paragraphs.length - this.paragraphIdx)
+      for (let i = 0; i < count; i++) {
+        if (i > 0) words.push(Game.PARA_BREAK)
+        const text = chapter.paragraphs[this.paragraphIdx + i]
+        for (const token of text.split(/\s+/).filter((w: string) => w.length > 0)) {
+          const m = token.match(/^([^a-zA-Z0-9''\u2019]*)(.+?)([^a-zA-Z0-9''\u2019]*)$/)
+          if (m) { if (m[1]) words.push(m[1]); words.push(m[2]); if (m[3]) words.push(m[3]) }
+          else words.push(token)
+        }
+      }
+      this.wordsInParagraph = words
+      this.wordCursor = save.wordCursor ?? words.length
+      this.totalWordsInParagraph = save.totalWordsInParagraph ?? words.filter(w => w !== Game.PARA_BREAK).length
+      this.levelBasePoints = save.levelBasePoints ?? 0
+
+      // Restore bricks, balls, pickups from snapshot
+      this.bricks = save.bricks.map(unsnapBrick)
+      this.balls = save.balls ? save.balls.map(unsnapBall) : []
+      this.pickups = save.pickups ? save.pickups.map(unsnapPickup) : []
+      if (this.balls.length === 0) { this.balls = []; this.spawnBall() }
+
+      this.bricksScrollY = save.bricksScrollY ?? 0
+      this.started = save.started ?? false
+      this.hasLaunched = save.hasLaunched ?? false
+      this.hasRecalled = save.hasRecalled ?? false
+      this.backWallActive = save.backWallActive ?? false
+      this.backWallReveal = save.backWallReveal ?? 0
+      this.freezeTimer = save.freezeTimer ?? 0
+      this.bricksDriftSpeed = save.bricksDriftSpeed ?? this.baseDriftSpeed
+      this.levelWords = save.levelWords ?? []
+      this.levelLivesLost = save.levelLivesLost ?? 0
+      this.brickHitThisLevel = save.brickHitThisLevel ?? false
+      this.islandGroups.clear()
+
+      if (save.levelState === 'shop') {
+        this.openShop()
+      } else {
+        this.levelState = save.levelState ?? 'playing'
+      }
     } else {
-      this.levelState = 'playing'
+      // Legacy save without snapshot — reload level from scratch
+      this.loadParagraph(this.chapterIdx, this.paragraphIdx)
+      this.balls = []
+      this.spawnBall()
+      if (save.levelState === 'shop') {
+        this.openShop()
+      } else {
+        this.levelState = 'playing'
+      }
     }
+
     this.updateSidebar()
+    // Always start paused after restore so the player can orient themselves
+    this.paused = true
   }
 
   static loadFromStorage = loadFromStorage

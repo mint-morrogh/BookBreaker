@@ -478,8 +478,6 @@ async function loadAndStart(bookIdx: number, save?: ReturnType<Game['getSaveStat
   let running = true
   const game = new Game(canvas, bookIdx, tagMap, tutorial)
   activeGame = game
-  // Mark that a game is actively running (survives mobile page kills)
-  if (!tutorial) localStorage.setItem('bb_in_game', '1')
 
   // Tutorial: return to book picker when game ends
   if (tutorial) {
@@ -518,11 +516,5 @@ async function loadAndStart(bookIdx: number, save?: ReturnType<Game['getSaveStat
   }
 }
 
-// ── Entry point — auto-resume if game was active, else show menu ──
-const _bootSave = Game.loadFromStorage()
-if (_bootSave && localStorage.getItem('bb_in_game') === '1') {
-  // Mobile browser killed the page while game was running — jump straight back in
-  loadAndStart(_bootSave.bookIdx, _bootSave)
-} else {
-  showMainMenu()
-}
+// ── Entry point — always show menu so user can choose continue or new run ──
+showMainMenu()

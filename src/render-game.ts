@@ -336,10 +336,13 @@ export function renderGame(
   for (const ball of state.balls) {
     // Color intensity from actual velocity — 11 steps (0-10)
     // Shifted so first ~5 speed-ups stay yellow/gold, then ramps through orange to red
-    const speed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy)
+    // Magnet-caught balls: derive intensity from stored speed so color is preserved
+    const speed = ball.stuck && ball.magnetSpeed > 0
+      ? ball.magnetSpeed
+      : Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy)
     const speedRatio = state.ballSpeed > 0 ? speed / state.ballSpeed : 0
     // Linear 0-10 from speed hits (log scale matches 1.1x compounding)
-    const rawStep = ball.stuck ? 0 : Math.log(Math.max(1, speedRatio)) / Math.log(1.1)
+    const rawStep = (ball.stuck && ball.magnetSpeed <= 0) ? 0 : Math.log(Math.max(1, speedRatio)) / Math.log(1.1)
     // Power curve: stays low early, ramps late (5 hits ≈ index 3 orange, 10 hits = 10 red)
     const intensity = Math.min(10, Math.max(0, Math.round((rawStep / 10) ** 1.6 * 10)))
     const ballColor = BALL_COLORS[intensity]
@@ -465,7 +468,7 @@ export function renderGame(
     ctx.font = `bold 13px 'JetBrains Mono', monospace`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
-    ctx.fillText(state.isMobile ? '[ TAP RECALL button ]' : '[ RIGHT CLICK to recall ball ]', W / 2, state.paddleY + 60)
+    ctx.fillText(state.isMobile ? '[ SWIPE UP to recall ball ]' : '[ RIGHT CLICK to recall ball ]', W / 2, state.paddleY + 60)
     ctx.shadowBlur = 0
   }
 }

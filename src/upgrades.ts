@@ -72,7 +72,7 @@ export function activateUpgrade(pickup: Pickup, state: UpgradeState): UpgradeEve
             backWallHits: 0,
             slamStacks: 0,
             blastCharge: 0,
-            pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, homingLeft: 0, homingCooldown: 0,
+            pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0,
           })
         }
       } else {
@@ -92,7 +92,7 @@ export function activateUpgrade(pickup: Pickup, state: UpgradeState): UpgradeEve
             backWallHits: source.backWallHits,
             slamStacks: source.slamStacks,
             blastCharge: 0,
-            pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, homingLeft: 0, homingCooldown: 0,
+            pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0,
           })
         }
       }
@@ -185,33 +185,100 @@ export function hitBrick(brick: Brick, ball: Ball, state: UpgradeState): void {
     })
   }
 
-  // Subtle spark burst — small dots radiate from impact
+  // ── Break effects — scale with combo multiplier ──
+  // All sizes must be 14+ to be visible on mobile (renderer divides by 16)
   const cx = brick.x + brick.w / 2
   const cy = brickScreenY + brick.h / 2
-  const sparkCount = 3 + Math.floor(Math.random() * 2)
+  const combo = state.multiplier  // 1.0–10.0
+  const comboT = Math.min(1, (combo - 1) / 6)  // 0→1 over x1–x7
+
+  // Spark dots — more and faster at higher combo
+  const sparkCount = 4 + Math.floor(comboT * 5)
+  const sparkSpeed = 80 + comboT * 100
   for (let i = 0; i < sparkCount; i++) {
     const angle = (i / sparkCount) * Math.PI * 2 + Math.random() * 0.8
-    const speed = 80 + Math.random() * 120
+    const speed = sparkSpeed + Math.random() * 120
     state.particles.push({
       x: cx + (Math.random() - 0.5) * brick.w * 0.4,
       y: cy + (Math.random() - 0.5) * brick.h * 0.3,
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed,
-      char: '·',
+      char: '*',
       life: 0.3 + Math.random() * 0.2,
       maxLife: 0.5,
       color: brick.color,
-      size: 6 + Math.random() * 4,
+      size: 14 + Math.random() * 4 + comboT * 4,
     })
   }
-  // Brief white flash at center
+
+  // Box corner fragments — fly out from brick corners
+  if (combo >= 2) {
+    const corners = [
+      { ch: '+', x: brick.x, y: brickScreenY, vx: -1, vy: -1 },
+      { ch: '+', x: brick.x + brick.w, y: brickScreenY, vx: 1, vy: -1 },
+      { ch: '+', x: brick.x, y: brickScreenY + brick.h, vx: -1, vy: 1 },
+      { ch: '+', x: brick.x + brick.w, y: brickScreenY + brick.h, vx: 1, vy: 1 },
+    ]
+    const cornerSpeed = 40 + comboT * 80
+    for (const c of corners) {
+      if (Math.random() > 0.4 + comboT * 0.3) continue
+      state.particles.push({
+        x: c.x, y: c.y,
+        vx: c.vx * cornerSpeed + (Math.random() - 0.5) * 30,
+        vy: c.vy * cornerSpeed + (Math.random() - 0.5) * 30,
+        char: c.ch,
+        life: 0.4 + comboT * 0.3, maxLife: 0.8,
+        color: brick.color,
+        size: 16 + comboT * 4,
+      })
+    }
+  }
+
+  // Edge fragments — border shatter at higher combo
+  if (combo >= 4) {
+    const edgeCount = 2 + Math.floor(comboT * 3)
+    for (let i = 0; i < edgeCount; i++) {
+      const ch = Math.random() > 0.5 ? '-' : '|'
+      const ex = ch === '-'
+        ? brick.x + Math.random() * brick.w
+        : (Math.random() > 0.5 ? brick.x : brick.x + brick.w)
+      const ey = ch === '-'
+        ? (Math.random() > 0.5 ? brickScreenY : brickScreenY + brick.h)
+        : brickScreenY + Math.random() * brick.h
+      const eAngle = Math.atan2(ey - cy, ex - cx) + (Math.random() - 0.5) * 0.5
+      const eSpeed = 60 + Math.random() * 80
+      state.particles.push({
+        x: ex, y: ey,
+        vx: Math.cos(eAngle) * eSpeed,
+        vy: Math.sin(eAngle) * eSpeed,
+        char: ch,
+        life: 0.3 + Math.random() * 0.2, maxLife: 0.6,
+        color: brick.color,
+        size: 16 + comboT * 4,
+      })
+    }
+  }
+
+  // Expanding ring at high combo
+  if (combo >= 6) {
+    state.particles.push({
+      x: cx, y: cy,
+      vx: 0, vy: 0,
+      char: 'o',
+      life: 0.35, maxLife: 0.4,
+      color: brick.color,
+      size: 28 + comboT * 16,
+    })
+  }
+
+  // Brief white flash at center — grows with combo
   state.particles.push({
     x: cx, y: cy,
     vx: 0, vy: 0,
-    char: '∗',
-    life: 0.15, maxLife: 0.2,
+    char: '*',
+    life: 0.15 + comboT * 0.05, maxLife: 0.25,
     color: '#ffffff',
-    size: 14 + brick.word.length * 0.5,
+    size: 18 + brick.word.length * 0.5 + comboT * 8,
   })
 
   // Gold coin — tier-based reward (stopwords give nothing)

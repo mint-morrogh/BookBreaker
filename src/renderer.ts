@@ -409,7 +409,7 @@ export function renderPenalty(ctx: CanvasRenderingContext2D, W: number, H: numbe
 }
 
 // ── Overlay: Pause ─────────────────────────────────────────────
-export function renderPause(ctx: CanvasRenderingContext2D, W: number, H: number) {
+export function renderPause(ctx: CanvasRenderingContext2D, W: number, H: number, isMobile: boolean) {
   ctx.fillStyle = 'rgba(6, 8, 12, 0.80)'
   ctx.fillRect(0, 0, W, H)
 
@@ -436,5 +436,12 @@ export function renderPause(ctx: CanvasRenderingContext2D, W: number, H: number)
 
   ctx.fillStyle = '#4a5568'
   ctx.font = `11px 'JetBrains Mono', monospace`
-  ctx.fillText('click into window to resume', cx, cy + 34)
+  if (isMobile) {
+    ctx.fillText('tap to resume', cx, cy + 34)
+    ctx.fillText('hold to move · 2nd finger to slam', cx, cy + 52)
+    ctx.fillText('swipe up to recall ball', cx, cy + 70)
+  } else {
+    ctx.fillText('click to resume', cx, cy + 34)
+    ctx.fillText('click to slam · right click to recall', cx, cy + 52)
+  }
 }

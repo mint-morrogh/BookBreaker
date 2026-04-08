@@ -572,32 +572,6 @@
       color: #374151;
       letter-spacing: 1px;
     }
-    /* Recall button — large, bottom of screen, mobile only by default */
-    #recall-btn {
-      display: none;
-      position: absolute;
-      bottom: 20px;
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 10;
-      background: rgba(251, 191, 36, 0.15);
-      border: 2px solid #fbbf24;
-      border-radius: 12px;
-      color: #fbbf24;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 16px;
-      font-weight: 700;
-      padding: 14px 36px;
-      cursor: pointer;
-      letter-spacing: 3px;
-      text-transform: uppercase;
-      touch-action: manipulation;
-      box-shadow: 0 0 24px rgba(251, 191, 36, 0.25);
-    }
-    #recall-btn:active {
-      background: rgba(251, 191, 36, 0.35);
-      transform: translateX(-50%) scale(0.95);
-    }
     /* Mini stats bar (mobile — top nav, hidden on desktop) */
     #mini-stats {
       display: none;
@@ -789,7 +763,6 @@
     </div>
     <div id="game-area">
       <canvas id="game"></canvas>
-      <button id="recall-btn">RECALL</button>
     </div>
     <div id="sidebar-backdrop"></div>
     <div id="sidebar">

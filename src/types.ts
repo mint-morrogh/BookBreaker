@@ -31,6 +31,7 @@ export interface Ball {
   pierceLeft: number    // 0 = normal bounce, else bricks remaining to pierce through
   magnetSpeed: number   // if > 0, launch at this speed instead of default (preserved from catch)
   magnetImmunity: number // seconds of immunity to magnet re-catch after launching from magnet
+  magnetOffsetX: number  // x offset from paddle center when caught by magnet (0 = centered/normal)
   homingLeft: number    // remaining homing shots (0 = normal, >0 = arc toward highest-value brick)
   homingCooldown: number // seconds of free movement after a homing hit before re-engaging
 }
