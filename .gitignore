@@ -6,6 +6,9 @@ node_modules/
 # Build output
 dist/
 
+# Raw Gutenberg source texts (build-time only, not needed at runtime)
+raw/
+
 # AI tooling
 .claude/
 .hyperspace/
