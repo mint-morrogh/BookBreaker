@@ -15,6 +15,9 @@ export interface Brick {
   breakOffGroupId: number // island group id (0 = none)
   breakOffOrigX: number   // original x at time of break-off
   breakOffOrigY: number   // original y at time of break-off
+  rare: boolean           // true for longest word in the book
+  title: boolean          // true for words from the book's title
+  palindrome: boolean     // true for palindrome words (4+ letters)
 }
 
 export interface Ball {

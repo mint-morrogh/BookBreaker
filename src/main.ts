@@ -1,6 +1,6 @@
 import { Game, getTopScore } from './game'
 import { BOOKS, makeCustomBook, addCustomBook, removeCustomBook } from './content'
-import { tagBook } from './tagger'
+import { tagBook, buildRareWords } from './tagger'
 import { clearAllScores, isBookBeaten } from './scoring'
 import { parseFile, detectFormat, ACCEPTED_EXTENSIONS } from './book-parser'
 import { createTutorialBook, isTutorialDone, markTutorialDone, TutorialController } from './tutorial'
@@ -675,15 +675,20 @@ async function loadAndStart(bookIdx: number, save?: ReturnType<Game['getSaveStat
   overlay.classList.remove('active')
   document.getElementById('app')!.style.display = 'flex'
 
+  const rareWords = buildRareWords(book.chapters)
+
   const canvas = document.getElementById('game') as HTMLCanvasElement
   let running = true
-  const game = new Game(canvas, bookIdx, tagMap, tutorial)
+  const game = new Game(canvas, bookIdx, tagMap, rareWords, tutorial)
   activeGame = game
 
   // Return to menu when game ends (game over or tutorial complete)
   game.onGameEnd = () => {
+    if (!running) return  // already ended — stale listener guard
     running = false
     activeGame = null
+    game.onGameEnd = undefined  // prevent stale listeners from re-firing
+    game.destroy()
     hideAll()
     showMainMenu()
   }

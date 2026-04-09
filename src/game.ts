@@ -4,7 +4,7 @@ import type { WordTag } from './tagger'
 import type { Brick, Ball, Particle, Pickup, Dot, Shrapnel, ShopItem } from './types'
 import { scoreWord, getHighScores, saveHighScore, markBookBeaten } from './scoring'
 export { getTopScore } from './scoring'
-import { TAG_COLORS, PUNCTUATION_COLOR, wordColor, isPunctuation, setActiveTagMap, colorTier } from './colors'
+import { TAG_COLORS, PUNCTUATION_COLOR, wordColor, isPunctuation, setActiveTagMap, setActiveRareWords, isRareWord, setActiveTitleWords, isTitleWord, buildTitleWords, isPalindrome, colorTier } from './colors'
 import { sidebarEls, initLetterGrid, clearWordLog, flushWordLog } from './sidebar'
 import { renderGameOver, renderPause, renderTutorialComplete } from './renderer'
 import { updateBalls, type PhysicsState } from './physics'
@@ -33,7 +33,7 @@ export class Game {
   private H = VIRTUAL_H
   private dpr = 1
   private scale = 1    // physical-to-virtual scale factor
-
+  
   // paddle
   private paddleX = 0
   private paddleW = 120
@@ -61,6 +61,7 @@ export class Game {
   private brickPadY = 4
   private bricksScrollY = 0      // how far bricks have scrolled up
   private bricksDriftSpeed = 6.4  // px/sec upward drift (20% slower)
+  private rareCount = 0           // rare bricks placed this chapter (cap 3)
 
   // book / chapter / paragraph
   private book!: Book
@@ -158,6 +159,7 @@ export class Game {
   private slamCooldown = 0    // seconds until next slam allowed
   private slamWallTimer = 0   // how long paddle has been sitting at max extension
   private keysDown = new Set<string>()
+  private _listeners: { target: EventTarget; type: string; fn: EventListener }[] = []
   private isMobile = false
   private moveTouchId: number | null = null
   private slamTouchId: number | null = null
@@ -168,6 +170,7 @@ export class Game {
   private hasLaunched = false    // true after first launch this run
   private hasRecalled = false    // true after first recall this run
   private gameOver = false
+  private gameTime = 0           // total elapsed game time (for animations)
   private brickHitThisLevel = false  // true once a ball breaks any brick this level
   paused = false
   private sidebarTimer = 0
@@ -181,13 +184,16 @@ export class Game {
   private _bookIdx = -1
   onGameEnd?: () => void  // callback when tutorial ends
 
-  constructor(canvas: HTMLCanvasElement, bookIdx: number, tagMap: Map<string, WordTag>, tutorial?: TutorialController | null) {
+  constructor(canvas: HTMLCanvasElement, bookIdx: number, tagMap: Map<string, WordTag>, rareWords: Set<string>, tutorial?: TutorialController | null) {
     this.canvas = canvas
     this.ctx = canvas.getContext('2d')!
     this._bookIdx = bookIdx
     this.tutorial = tutorial ?? null
     this.book = this.tutorial ? BOOKS[bookIdx] : this.mergeShortParagraphs(BOOKS[bookIdx])
     setActiveTagMap(tagMap)
+    setActiveRareWords(rareWords)
+    setActiveTitleWords(buildTitleWords(this.book.title))
+    this.rareCount = 0
     // Detect mobile before resize so virtual width can adapt
     this.isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0
     if (this.isMobile) {
@@ -202,26 +208,26 @@ export class Game {
     this.updateSidebar()
 
     let resizeTimer = 0
-    window.addEventListener('resize', () => {
+    this._on(window, 'resize', () => {
       clearTimeout(resizeTimer)
       resizeTimer = window.setTimeout(() => this.resize(), 150) as unknown as number
     })
-    window.addEventListener('mousemove', (e) => {
+    this._on(window, 'mousemove', (e: MouseEvent) => {
       const rect = this.canvas.getBoundingClientRect()
       this.mouseX = (e.clientX - rect.left) / rect.width * this.W
     })
-    window.addEventListener('keydown', (e) => {
+    this._on(window, 'keydown', (e: KeyboardEvent) => {
       this.keysDown.add(e.key)
       if (e.key === ' ' || e.key === 'Enter') {
         e.preventDefault()
         if (this.levelState === 'playing') this.launchBalls()
       }
     })
-    window.addEventListener('keyup', (e) => this.keysDown.delete(e.key))
+    this._on(window, 'keyup', (e: KeyboardEvent) => this.keysDown.delete(e.key))
 
     // Left click: hold to push paddle forward, release to snap back
     // Click: slam paddle forward (also launches ball if stuck)
-    this.canvas.addEventListener('mousedown', (e) => {
+    this._on(this.canvas, 'mousedown', (e: MouseEvent) => {
       if (e.button !== 0) return
       if (this.gameOver) {
         if (this.onGameEnd) this.onGameEnd()
@@ -256,7 +262,7 @@ export class Game {
         if (this.slamCooldown <= 0) this.mouseDown = true
       }
     })
-    window.addEventListener('mouseup', (e) => {
+    this._on(window, 'mouseup', (e: MouseEvent) => {
       if (e.button === 0 && this.mouseDown) {
         this.mouseDown = false
         this.slamCooldown = 0.3  // brief cooldown after release
@@ -264,7 +270,7 @@ export class Game {
     })
 
     // Right click: recall ball
-    this.canvas.addEventListener('contextmenu', (e) => {
+    this._on(this.canvas, 'contextmenu', (e: MouseEvent) => {
       e.preventDefault()
       if (this.charge >= 1.0 && this.balls.some(b => !b.stuck)) {
         this.recallBall()
@@ -272,7 +278,7 @@ export class Game {
     })
 
     // ── Touch controls (mobile) — multi-touch + swipe-up recall ──
-    this.canvas.addEventListener('touchstart', (e) => {
+    this._on(this.canvas, 'touchstart', (e: TouchEvent) => {
       e.preventDefault()
 
       // State transitions — any touch
@@ -333,9 +339,9 @@ export class Game {
           if (this.slamCooldown <= 0) this.mouseDown = true
         }
       }
-    }, { passive: false })
+    })
 
-    this.canvas.addEventListener('touchmove', (e) => {
+    this._on(this.canvas, 'touchmove', (e: TouchEvent) => {
       e.preventDefault()
       for (let i = 0; i < e.changedTouches.length; i++) {
         const touch = e.changedTouches[i]
@@ -344,7 +350,7 @@ export class Game {
           this.mouseX = (touch.clientX - rect.left) / rect.width * this.W
         }
       }
-    }, { passive: false })
+    })
 
     const handleTouchEnd = (e: TouchEvent) => {
       for (let i = 0; i < e.changedTouches.length; i++) {
@@ -374,18 +380,18 @@ export class Game {
         }
       }
     }
-    window.addEventListener('touchend', handleTouchEnd)
-    window.addEventListener('touchcancel', handleTouchEnd)
+    this._on(window, 'touchend', handleTouchEnd as EventListener)
+    this._on(window, 'touchcancel', handleTouchEnd as EventListener)
 
     // Pause on any focus loss — tab switch, app switch, etc.
     // Also snapshot state so continue-run restores exactly here
-    window.addEventListener('blur', () => {
+    this._on(window, 'blur', () => {
       if (!this.gameOver) {
         this.paused = true
         if (!this.tutorial) saveToStorage(this.getSaveState())
       }
     })
-    document.addEventListener('visibilitychange', () => {
+    this._on(document, 'visibilitychange', () => {
       if (document.hidden && !this.gameOver) {
         this.paused = true
         if (!this.tutorial) saveToStorage(this.getSaveState())
@@ -434,10 +440,10 @@ export class Game {
 
     // Scale drift speed proportional to field height so timing stays consistent
     // Slightly faster for harder difficulties (imperceptible per step, adds up)
-    const diffMult = this.book.difficulty === 'Medium' ? 1.08
-      : this.book.difficulty === 'Hard' ? 1.18
-      : this.book.difficulty === 'Very Hard' ? 1.28
-      : 1.0  // Easy / Custom
+    const diffMult = this.book.difficulty === 'Medium' ? 1.25
+      : this.book.difficulty === 'Hard' ? 1.55
+      : this.book.difficulty === 'Very Hard' ? 1.9
+      : 1.08  // Easy / Custom
     this.baseDriftSpeed = 6.4 * diffMult * (this.H / VIRTUAL_H)
     if (this.freezeTimer <= 0) this.bricksDriftSpeed = this.baseDriftSpeed
 
@@ -648,6 +654,14 @@ export class Game {
         let color = wordColor(word)
         if (this.tutorial) color = this.tutorial.overrideBrickColor(color, this.wordCursor)
         const isStop = color === TAG_COLORS.stopword
+        const rare = !isPunc && !isStop && this.rareCount < 1 && isRareWord(word)
+        if (rare) this.rareCount++
+        const title = !isPunc && !isStop && isTitleWord(word)
+        const palindrome = !isPunc && !isStop && isPalindrome(word)
+        const basePoints = isPunc ? 5 : scoreWord(word, isStop)
+        let pointsMult = 1
+        if (rare) pointsMult *= 2
+        if (palindrome) pointsMult *= 5
         const brick: Brick = {
           word,
           x: curX,
@@ -657,7 +671,7 @@ export class Game {
           alive: true,
           alpha: 1,
           color,
-          points: isPunc ? 5 : scoreWord(word, isStop),
+          points: basePoints * pointsMult,
           boxed: true,
           breakOff: 0,
           breakOffVx: 0,
@@ -665,6 +679,9 @@ export class Game {
           breakOffGroupId: 0,
           breakOffOrigX: 0,
           breakOffOrigY: 0,
+          rare,
+          title,
+          palindrome,
         }
         rowBricks.push(brick)
         this.bricks.push(brick)
@@ -707,7 +724,7 @@ export class Game {
               w: actualW, h: rowH,
               alive: true, alpha: 1, color: '#3a3f4a', points: 0, boxed: true,
               breakOff: 0, breakOffVx: 0, breakOffAngle: 0,
-              breakOffGroupId: 0, breakOffOrigX: 0, breakOffOrigY: 0,
+              breakOffGroupId: 0, breakOffOrigX: 0, breakOffOrigY: 0, rare: false, title: false, palindrome: false,
             })
           }
         }
@@ -959,6 +976,7 @@ export class Game {
 
   // ── Update ──────────────────────────────────────────────────
   update(dt: number) {
+    this.gameTime += dt
     if (this.paused) return
     if (this.gameOver) {
       if (this.keysDown.has(' ') || this.keysDown.has('Enter')) {
@@ -2223,6 +2241,7 @@ export class Game {
         markBookBeaten(this.book.title)
       }
       this.chapterIdx = nextIdx % this.book.chapters.length
+      this.rareCount = 0  // reset rare cap for new chapter
       this.loadParagraph(this.chapterIdx, 0)
     }
     // Wait for ball launch before scrolling
@@ -2336,6 +2355,7 @@ export class Game {
       magnetCharges: this.magnetCharges,
       maxWiden: MAX_WIDEN,
       maxSafety: MAX_SAFETY,
+      gameTime: this.gameTime,
     }
   }
 
@@ -2448,6 +2468,7 @@ export class Game {
       magnetCharges: this.magnetCharges,
       backWallReveal: this.backWallReveal,
       tutorialPhase: this.tutorial ? this.tutorial.phase : -1,
+      gameTime: this.gameTime,
     }
     renderGame(ctx, W, H, renderState)
 
@@ -2804,6 +2825,20 @@ export class Game {
     this.updateSidebar()
     // Always start paused after restore so the player can orient themselves
     this.paused = true
+  }
+
+  private _on<K extends keyof HTMLElementEventMap>(target: EventTarget, type: K, fn: (e: HTMLElementEventMap[K]) => void): void
+  private _on(target: EventTarget, type: string, fn: EventListener): void
+  private _on(target: EventTarget, type: string, fn: EventListener): void {
+    target.addEventListener(type, fn)
+    this._listeners.push({ target, type, fn })
+  }
+
+  destroy() {
+    for (const { target, type, fn } of this._listeners) {
+      target.removeEventListener(type, fn)
+    }
+    this._listeners = []
   }
 
   static loadFromStorage = loadFromStorage

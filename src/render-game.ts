@@ -1,5 +1,5 @@
 import type { Ball, Brick, Particle, Pickup, Dot, Shrapnel } from './types'
-import { DOT_COLORS, BALL_COLORS } from './colors'
+import { DOT_COLORS, BALL_COLORS, rareColor, hexToRgba } from './colors'
 import { roundRect } from './renderer'
 
 // ── State needed for the main game render pass ─────────────────
@@ -35,6 +35,7 @@ export interface RenderState {
   magnetCharges: number
   backWallReveal: number  // 0→1 animation for back wall line appearance
   tutorialPhase: number   // -1 if not in tutorial, else current phase index
+  gameTime: number        // total elapsed time for animations
 }
 
 export function renderGame(
@@ -120,18 +121,153 @@ export function renderGame(
     }
 
     if (brick.boxed) {
-      ctx.fillStyle = '#0f1520'
-      ctx.strokeStyle = brick.color
-      ctx.lineWidth = 1
+      // Rare bricks use a slowly cycling rainbow color
+      const brickCol = brick.rare ? rareColor(state.gameTime) : brick.color
+
+      // Rare word glow — strong pulsing outer glow in current rainbow color
+      if (brick.rare) {
+        const pulse = 0.7 + 0.3 * Math.sin(state.gameTime * 3)
+        ctx.shadowColor = brickCol
+        ctx.shadowBlur = (state.isMobile ? 10 : 22) * pulse
+      }
+      // Title bricks get a subtle warm glow
+      if (brick.title) {
+        ctx.shadowColor = '#e8c44a'
+        ctx.shadowBlur = state.isMobile ? 4 : 8
+      }
+      // Palindrome bricks get a silver/chrome glow
+      if (brick.palindrome) {
+        ctx.shadowColor = '#c0c8d8'
+        ctx.shadowBlur = state.isMobile ? 5 : 10
+      }
+      ctx.fillStyle = brick.palindrome ? '#111824' : '#0f1520'
+      ctx.strokeStyle = brickCol
+      ctx.lineWidth = brick.rare ? 1.5 : (brick.title || brick.palindrome) ? 1.5 : 1
       roundRect(ctx, brick.x, brick.y, brick.w, brick.h, 3)
       ctx.fill()
-      ctx.stroke()
+      if (!brick.palindrome) ctx.stroke()  // palindromes draw their own gradient border later
+      if (brick.title || brick.palindrome) ctx.shadowBlur = 0
+      // Second glow pass for rare — doubles the glow intensity
+      if (brick.rare) {
+        ctx.stroke()
+        ctx.shadowBlur = 0
+      }
+
+      // Title brick shimmer — white highlight sweeps across periodically
+      if (brick.title) {
+        // Shimmer every ~3 seconds, sweep takes 0.4s
+        const cycle = 3.0
+        const sweepDur = 0.4
+        const t = ((state.gameTime + brick.x * 0.01) % cycle)  // offset by x so they don't all sync
+        if (t < sweepDur) {
+          const progress = t / sweepDur  // 0→1 across the brick
+          const shimmerX = brick.x + progress * brick.w
+          ctx.save()
+          ctx.beginPath()
+          roundRect(ctx, brick.x, brick.y, brick.w, brick.h, 3)
+          ctx.clip()
+          // White gradient band sweeping left to right
+          const bandW = brick.w * 0.35
+          const grad = ctx.createLinearGradient(shimmerX - bandW, 0, shimmerX + bandW, 0)
+          grad.addColorStop(0, 'rgba(255,255,255,0)')
+          grad.addColorStop(0.5, 'rgba(255,255,255,0.25)')
+          grad.addColorStop(1, 'rgba(255,255,255,0)')
+          ctx.fillStyle = grad
+          ctx.fillRect(brick.x, brick.y, brick.w, brick.h)
+          ctx.restore()
+        }
+      }
+
+      // Palindrome brick — inner tint + metallic gradient border on top
+      if (brick.palindrome) {
+        // Inner fill tint first
+        ctx.fillStyle = hexToRgba(brick.color, 0.12)
+        roundRect(ctx, brick.x, brick.y, brick.w, brick.h, 3)
+        ctx.fill()
+        // Gradient border on top — bright spot rocks left-to-right
+        const phase = Math.sin(state.gameTime * 1.2 + brick.x * 0.02) * 0.5 + 0.5
+        const grad = ctx.createLinearGradient(brick.x, 0, brick.x + brick.w, 0)
+        const spotPos = Math.max(0.05, Math.min(0.95, phase))
+        const bright = hexToRgba(brick.color, 0.7)
+        const dim = hexToRgba(brick.color, 0.25)
+        grad.addColorStop(0, dim)
+        grad.addColorStop(Math.max(0, spotPos - 0.2), dim)
+        grad.addColorStop(spotPos, bright)
+        grad.addColorStop(Math.min(1, spotPos + 0.2), dim)
+        grad.addColorStop(1, dim)
+        ctx.strokeStyle = grad
+        ctx.lineWidth = 3
+        roundRect(ctx, brick.x, brick.y, brick.w, brick.h, 3)
+        ctx.stroke()
+      }
+
+      // Rare word tron runner — dot fading between rainbow color and white
+      if (brick.rare) {
+        const perim = 2 * (brick.w + brick.h)
+        const speed = 180 // px/sec
+        const pos = ((state.gameTime * speed) % perim + perim) % perim
+
+        const perimXY = (p: number): [number, number] => {
+          if (p < brick.w) return [brick.x + p, brick.y]
+          if (p < brick.w + brick.h) return [brick.x + brick.w, brick.y + (p - brick.w)]
+          if (p < 2 * brick.w + brick.h) return [brick.x + brick.w - (p - brick.w - brick.h), brick.y + brick.h]
+          return [brick.x, brick.y + brick.h - (p - 2 * brick.w - brick.h)]
+        }
+
+        // Lead dot — fades between white and current rainbow color
+        const colorPhase = 0.5 + 0.5 * Math.sin(state.gameTime * 5)
+        const [rx, ry] = perimXY(pos)
+        ctx.shadowColor = brickCol
+        ctx.shadowBlur = state.isMobile ? 6 : 14
+        ctx.fillStyle = colorPhase > 0.5 ? '#ffffff' : brickCol
+        ctx.globalAlpha = brick.alpha
+        ctx.beginPath()
+        ctx.arc(rx, ry, 2.5, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.shadowBlur = 0
+
+        // Trailing glow — 6 segments fading out
+        const trailSpacing = 5
+        for (let t = 1; t <= 6; t++) {
+          const tp = ((pos - t * trailSpacing) % perim + perim) % perim
+          const [tx, ty] = perimXY(tp)
+          const fade = 1 - t / 7
+          ctx.globalAlpha = brick.alpha * fade * 0.6
+          ctx.fillStyle = t <= 3 ? '#ffffff' : brickCol
+          ctx.beginPath()
+          ctx.arc(tx, ty, 2 - t * 0.2, 0, Math.PI * 2)
+          ctx.fill()
+        }
+        ctx.globalAlpha = brick.alpha
+      }
     }
 
     // Word text — drawn at world Y, translate handles the scroll
-    ctx.fillStyle = brick.color
+    ctx.fillStyle = brick.rare ? rareColor(state.gameTime) : brick.color
     ctx.textAlign = 'center'
-    ctx.fillText(brick.word, brick.x + brick.w / 2, brick.y + brick.h / 2 + 1)
+
+    if (brick.palindrome) {
+      // Flip animation — horizontally flips every ~4 seconds over 0.6s
+      const flipCycle = 4.0
+      const flipDur = 0.6
+      const ft = ((state.gameTime + brick.x * 0.007) % flipCycle)
+      const cx = brick.x + brick.w / 2
+      const cy = brick.y + brick.h / 2
+      if (ft < flipDur) {
+        // scaleX goes 1 → 0 → -1 → 0 → 1 using cosine
+        const scaleX = Math.cos((ft / flipDur) * Math.PI * 2)
+        ctx.save()
+        ctx.translate(cx, cy)
+        ctx.scale(scaleX, 1)
+        ctx.translate(-cx, -cy)
+        ctx.fillText(brick.word, cx, cy + 1)
+        ctx.restore()
+      } else {
+        ctx.fillText(brick.word, cx, brick.y + brick.h / 2 + 1)
+      }
+    } else {
+      ctx.fillText(brick.word, brick.x + brick.w / 2, brick.y + brick.h / 2 + 1)
+    }
 
     if (rotating) ctx.restore()
 

@@ -1,5 +1,5 @@
 import type { Ball, Brick, Particle, Pickup, Shrapnel, UpgradeType } from './types'
-import { colorTier, dropChance, UPGRADE_LABELS } from './colors'
+import { colorTier, dropChance, rareColor, rareColorTier, UPGRADE_LABELS } from './colors'
 import { logWord } from './sidebar'
 
 // ── State needed by upgrade/brick-hit logic ────────────────────
@@ -34,6 +34,7 @@ export interface UpgradeState {
   magnetCharges: number  // remaining magnet catches
   maxWiden: number
   maxSafety: number
+  gameTime: number
 }
 
 // ── Events returned so game.ts can apply mutations ─────────────
@@ -285,8 +286,10 @@ export function hitBrick(brick: Brick, ball: Ball, state: UpgradeState): void {
   })
 
   // Gold coin — tier-based reward (stopwords give nothing)
+  // Title bricks get 4x gold
   const coinTier = colorTier(brick.color)
-  const goldAmt = coinTier <= 0 ? 0 : coinTier === 1 ? 2 : coinTier === 2 ? 3 : coinTier === 3 ? 5 : 8
+  const baseGold = coinTier <= 0 ? 0 : coinTier === 1 ? 2 : coinTier === 2 ? 3 : coinTier === 3 ? 5 : 8
+  const goldAmt = brick.title ? baseGold * 4 : baseGold
   if (goldAmt > 0) {
     state.gold += goldAmt
     const bsy = brick.y - state.bricksScrollY
@@ -297,7 +300,107 @@ export function hitBrick(brick: Brick, ball: Ball, state: UpgradeState): void {
       vy: -80 - Math.random() * 30,
       char: `+${goldAmt} ◆`,
       life: 0.8, maxLife: 0.8,
-      color: '#fbbf24', size: 16,
+      color: '#fbbf24', size: brick.title ? 20 : 16,
+    })
+  }
+
+  // Title brick special effects — burst + label
+  if (brick.title) {
+    const cx2 = brick.x + brick.w / 2
+    const cy2 = brickScreenY + brick.h / 2
+    // Expanding gold ring
+    state.particles.push({
+      x: cx2, y: cy2, vx: 0, vy: 0,
+      char: 'o', life: 0.5, maxLife: 0.6,
+      color: '#e8c44a', size: 36,
+    })
+    // Star burst in brick's color
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * Math.PI * 2
+      const speed = 120 + Math.random() * 60
+      state.particles.push({
+        x: cx2, y: cy2,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        char: '✦',
+        life: 0.5 + Math.random() * 0.3, maxLife: 0.8,
+        color: brick.color, size: 14 + Math.random() * 4,
+      })
+    }
+    // Gold sparkles
+    for (let i = 0; i < 6; i++) {
+      state.particles.push({
+        x: cx2 + (Math.random() - 0.5) * brick.w,
+        y: cy2 + (Math.random() - 0.5) * brick.h,
+        vx: (Math.random() - 0.5) * 80,
+        vy: -60 - Math.random() * 60,
+        char: '◆',
+        life: 0.6 + Math.random() * 0.3, maxLife: 0.9,
+        color: '#e8c44a', size: 12 + Math.random() * 4,
+      })
+    }
+  }
+
+  // Palindrome brick special effects — mirror burst
+  if (brick.palindrome) {
+    const cx2 = brick.x + brick.w / 2
+    const cy2 = brickScreenY + brick.h / 2
+    // Silver expanding ring
+    state.particles.push({
+      x: cx2, y: cy2, vx: 0, vy: 0,
+      char: 'o', life: 0.5, maxLife: 0.6,
+      color: '#c0c8d8', size: 38,
+    })
+    // Mirror burst — particles fly out in mirrored pairs (left+right symmetry)
+    for (let i = 0; i < 6; i++) {
+      const angle = (i / 6) * Math.PI  // top half only
+      const speed = 130 + Math.random() * 70
+      // Right side
+      state.particles.push({
+        x: cx2, y: cy2,
+        vx: Math.cos(angle) * speed,
+        vy: -Math.sin(angle) * speed,
+        char: '✦', life: 0.6 + Math.random() * 0.3, maxLife: 0.9,
+        color: brick.color, size: 14 + Math.random() * 4,
+      })
+      // Mirrored left side
+      state.particles.push({
+        x: cx2, y: cy2,
+        vx: -Math.cos(angle) * speed,
+        vy: -Math.sin(angle) * speed,
+        char: '✦', life: 0.6 + Math.random() * 0.3, maxLife: 0.9,
+        color: brick.color, size: 14 + Math.random() * 4,
+      })
+    }
+    // Chrome sparkles
+    for (let i = 0; i < 4; i++) {
+      state.particles.push({
+        x: cx2 + (Math.random() - 0.5) * brick.w,
+        y: cy2 + (Math.random() - 0.5) * brick.h,
+        vx: (Math.random() - 0.5) * 60,
+        vy: -50 - Math.random() * 50,
+        char: '◇',
+        life: 0.5 + Math.random() * 0.3, maxLife: 0.8,
+        color: '#c0c8d8', size: 12 + Math.random() * 4,
+      })
+    }
+  }
+
+  // Special brick label — "Super rare!" if multiple types, otherwise individual name
+  const specialTypes = [brick.rare, brick.title, brick.palindrome].filter(Boolean).length
+  if (specialTypes > 0) {
+    const cx2 = brick.x + brick.w / 2
+    const cy2 = brickScreenY + brick.h / 2
+    const label = specialTypes >= 2 ? 'Super rare!'
+      : brick.rare ? 'RARE!'
+      : brick.palindrome ? 'Palindrome!'
+      : 'TITLE BRICK'
+    const labelColor = brick.rare ? rareColor(state.gameTime) : brick.color
+    state.particles.push({
+      x: cx2, y: cy2 - 16,
+      vx: 0, vy: -48,
+      char: label, life: 1.3, maxLife: 1.3,
+      color: labelColor, size: specialTypes >= 2 ? 20 : 16,
     })
   }
 
@@ -326,11 +429,38 @@ export function hitBrick(brick: Brick, ball: Ball, state: UpgradeState): void {
     }
   }
 
-  // Roll for upgrade drop (dropBonus is flat % added from shop Lucky Drops)
-  const tier = colorTier(brick.color)
-  if (tier > 0 && Math.random() < dropChance(tier) + state.dropBonus) {
-    const brickScreenY = brick.y - state.bricksScrollY
+  // Rare word special effects — prismatic burst in current rainbow color
+  if (brick.rare) {
+    const rc = rareColor(state.gameTime)
+    const cx2 = brick.x + brick.w / 2
+    const cy2 = brickScreenY + brick.h / 2
+    // Expanding ring
+    state.particles.push({
+      x: cx2, y: cy2, vx: 0, vy: 0,
+      char: 'o', life: 0.5, maxLife: 0.6,
+      color: '#ffffff', size: 40,
+    })
+    // Radiating star burst in rainbow color
+    const burstCount = 10
+    for (let i = 0; i < burstCount; i++) {
+      const angle = (i / burstCount) * Math.PI * 2
+      const speed = 140 + Math.random() * 80
+      state.particles.push({
+        x: cx2, y: cy2,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        char: '✦',
+        life: 0.6 + Math.random() * 0.3, maxLife: 0.9,
+        color: rc, size: 16 + Math.random() * 6,
+      })
+    }
+  }
 
+  // Roll for upgrade drop
+  // Rare bricks: 50% drop, tier determined by nearest tier color at break time
+  const tier = brick.rare ? rareColorTier(state.gameTime) : colorTier(brick.color)
+  const effectiveChance = brick.rare ? 1.0 : (tier > 0 ? dropChance(tier) + state.dropBonus : 0)
+  if (effectiveChance > 0 && Math.random() < effectiveChance) {
     // Build pool of eligible drop types, excluding maxed upgrades
     type DropEntry = { type: UpgradeType; weight: number }
     const dropPool: DropEntry[] = [

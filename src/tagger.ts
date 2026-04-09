@@ -46,6 +46,27 @@ function cacheTags(bookTitle: string, tagMap: Map<string, WordTag>): void {
   } catch { /* storage full — non-critical */ }
 }
 
+/** Find the longest word(s) in a book. Returns a set of all words
+ *  that tie for the maximum length (letters only, lowercased). */
+export function buildRareWords(
+  chapters: { paragraphs: string[] }[],
+): Set<string> {
+  let maxLen = 0
+  const wordsByLen = new Map<number, Set<string>>()
+  for (const ch of chapters) {
+    for (const para of ch.paragraphs) {
+      for (const token of para.split(/\s+/)) {
+        const w = token.toLowerCase().replace(/[^a-z]/g, '')
+        if (w.length < 1 || STOP_WORDS.has(w)) continue
+        if (w.length > maxLen) maxLen = w.length
+        if (!wordsByLen.has(w.length)) wordsByLen.set(w.length, new Set())
+        wordsByLen.get(w.length)!.add(w)
+      }
+    }
+  }
+  return wordsByLen.get(maxLen) ?? new Set()
+}
+
 export async function tagBook(
   chapters: { title: string; paragraphs: string[] }[],
   onProgress?: (ratio: number) => void,
