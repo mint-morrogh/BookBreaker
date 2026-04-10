@@ -612,6 +612,30 @@
     .mini-stat-val.combo { color: #f472b6; }
     .mini-stat-val.words { color: #a78bfa; }
     .mini-stat-val.gold { color: #fbbf24; }
+    .mini-stat-val.chapter { color: #34d399; }
+    /* Mini alphabet strip (mobile — below stats, hidden on desktop) */
+    #mini-alphabet {
+      display: none;
+    }
+    .mini-letter {
+      font: bold 10px 'JetBrains Mono', monospace;
+      color: #252a34;
+      text-align: center;
+      line-height: 1;
+      transition: color 0.2s;
+    }
+    .mini-letter.collected {
+      color: #fbbf24;
+      text-shadow: 0 0 6px rgba(251, 191, 36, 0.5);
+    }
+    .mini-letter.pop {
+      animation: letterPop 0.4s ease-out;
+    }
+    @keyframes letterPop {
+      0% { transform: scale(1); opacity: 0.3; }
+      40% { transform: scale(1.8); color: #fff; text-shadow: 0 0 10px #fbbf24; }
+      100% { transform: scale(1); }
+    }
     #mini-stats-open {
       font-size: 20px;
       color: #e8c44a;
@@ -654,14 +678,29 @@
         height: 38px;
         z-index: 60;
         background: #0c1018;
-        border-bottom: 2px solid #e8c44a;
+        border-bottom: none;
         padding: 0 8px;
         user-select: none;
         touch-action: manipulation;
       }
+      #mini-alphabet {
+        display: flex !important;
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-around;
+        position: absolute;
+        top: 38px; left: 0; right: 0;
+        height: 22px;
+        z-index: 60;
+        background: #0c1018;
+        border-bottom: 3px solid #e8c44a;
+        box-shadow: 0 1px 6px rgba(232, 196, 74, 0.3);
+        padding: 0 6px;
+        user-select: none;
+      }
       #game-area {
         position: absolute;
-        top: 38px; left: 0; right: 0; bottom: 0;
+        top: 60px; left: 0; right: 0; bottom: 0;
         margin: 0;
       }
       #game-area canvas {
@@ -670,11 +709,11 @@
       }
       #sidebar {
         position: fixed;
-        top: 38px;
+        top: 60px;
         left: 0;
         right: 0;
         width: 100%;
-        max-height: calc(100% - 38px);
+        max-height: calc(100% - 60px);
         z-index: 50;
         border-left: none;
         border-bottom: 1px solid #e8c44a;
@@ -701,7 +740,7 @@
         white-space: nowrap;
       }
       #sidebar-backdrop {
-        top: 38px;
+        top: 60px;
       }
       #sidebar-backdrop.open {
         display: block;
@@ -768,13 +807,13 @@
 
   <div id="app" style="display:none;">
     <div id="mini-stats">
-      <div class="mini-stat">SCR<div class="mini-stat-val score" id="mini-score">0</div></div>
-      <div class="mini-stat">GLD<div class="mini-stat-val gold" id="mini-gold">0</div></div>
-      <div class="mini-stat">LVS<div class="mini-stat-val lives" id="mini-lives">3</div></div>
-      <div class="mini-stat">CMB<div class="mini-stat-val combo" id="mini-combo">x1</div></div>
-      <div class="mini-stat">WRD<div class="mini-stat-val words" id="mini-words">0</div></div>
-      <div id="mini-stats-open">☰</div>
+      <div class="mini-stat">SCORE<div class="mini-stat-val score" id="mini-score">0</div></div>
+      <div class="mini-stat">COMBO<div class="mini-stat-val combo" id="mini-combo">x1</div></div>
+      <div class="mini-stat">GOLD<div class="mini-stat-val gold" id="mini-gold">0</div></div>
+      <div class="mini-stat">LIVES<div class="mini-stat-val lives" id="mini-lives">3</div></div>
+      <div class="mini-stat"><span id="mini-chapter-label" style="color:#5a6578">Ch 1</span><div class="mini-stat-val chapter" id="mini-chapter">Lv 1</div></div>
     </div>
+    <div id="mini-alphabet"></div>
     <div id="game-area">
       <canvas id="game"></canvas>
     </div>

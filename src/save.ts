@@ -70,6 +70,7 @@ interface BrickSnap {
   ra?: boolean // rare
   ti?: boolean // title
   pa?: boolean // palindrome
+  av?: boolean // allVowels
 }
 
 // Compact ball snapshot
@@ -124,7 +125,7 @@ export function snapBrick(b: Brick): BrickSnap {
     w: b.word, x: b.x, y: b.y, bw: b.w, h: b.h,
     c: b.color, p: b.points, bx: b.boxed,
     bo: b.breakOff, bg: b.breakOffGroupId,
-    ra: b.rare || undefined, ti: b.title || undefined, pa: b.palindrome || undefined,
+    ra: b.rare || undefined, ti: b.title || undefined, pa: b.palindrome || undefined, av: b.allVowels || undefined,
   }
 }
 
@@ -134,7 +135,7 @@ export function unsnapBrick(s: BrickSnap): Brick {
     alive: true, alpha: 1, color: s.c, points: s.p, boxed: s.bx,
     breakOff: s.bo, breakOffVx: 0, breakOffAngle: 0,
     breakOffGroupId: s.bg, breakOffOrigX: s.x, breakOffOrigY: s.y,
-    rare: s.ra ?? false, title: s.ti ?? false, palindrome: s.pa ?? false,
+    rare: s.ra ?? false, title: s.ti ?? false, palindrome: s.pa ?? false, allVowels: s.av ?? false,
   }
 }
 

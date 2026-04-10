@@ -22,6 +22,18 @@ export function initLetterGrid() {
     el.id = `letter-${String.fromCharCode(65 + i)}`
     sidebarEls.letterGrid.appendChild(el)
   }
+  // Mini alphabet strip (mobile)
+  const strip = document.getElementById('mini-alphabet')
+  if (strip) {
+    strip.innerHTML = ''
+    for (let i = 0; i < 26; i++) {
+      const el = document.createElement('span')
+      el.className = 'mini-letter'
+      el.textContent = String.fromCharCode(65 + i)
+      el.id = `mini-letter-${String.fromCharCode(65 + i)}`
+      strip.appendChild(el)
+    }
+  }
 }
 
 // ── Word log — aggregated, sorted by total points ───────────────

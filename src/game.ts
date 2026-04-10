@@ -2,9 +2,9 @@ import { prepareWithSegments, layoutWithLines } from '@chenglou/pretext'
 import { BOOKS, type Book } from './content'
 import type { WordTag } from './tagger'
 import type { Brick, Ball, Particle, Pickup, Dot, Shrapnel, ShopItem } from './types'
-import { scoreWord, getHighScores, saveHighScore, markBookBeaten } from './scoring'
+import { scoreWord, getHighScores, saveHighScore, saveBestProgress, markBookBeaten } from './scoring'
 export { getTopScore } from './scoring'
-import { TAG_COLORS, PUNCTUATION_COLOR, wordColor, isPunctuation, setActiveTagMap, setActiveRareWords, isRareWord, setActiveTitleWords, isTitleWord, buildTitleWords, isPalindrome, colorTier } from './colors'
+import { TAG_COLORS, PUNCTUATION_COLOR, wordColor, isPunctuation, setActiveTagMap, setActiveRareWords, isRareWord, setActiveTitleWords, isTitleWord, buildTitleWords, isPalindrome, hasAllVowels, colorTier } from './colors'
 import { sidebarEls, initLetterGrid, clearWordLog, flushWordLog } from './sidebar'
 import { renderGameOver, renderPause, renderTutorialComplete } from './renderer'
 import { updateBalls, type PhysicsState } from './physics'
@@ -243,15 +243,11 @@ export class Game {
         if (this.tutorial) {
           this.gameOver = true
           markTutorialDone()
-          const prevTop = getHighScores(this.book.title)[0] ?? 0
-          this.endScores = saveHighScore(this.book.title, this.score)
-          this.isNewHigh = this.score > 0 && this.score >= prevTop
+          this.endScores = this.saveScoreAndProgress()
         } else if (this.lives <= 0 || this.endGrade === 'D' || this.endGrade === 'F') {
           this.gameOver = true
           clearSave()
-          const prevTop = getHighScores(this.book.title)[0] ?? 0
-          this.endScores = saveHighScore(this.book.title, this.score)
-          this.isNewHigh = this.score > 0 && this.score >= prevTop
+          this.endScores = this.saveScoreAndProgress()
         } else {
           this.endGradeAdvance()
         }
@@ -301,15 +297,11 @@ export class Game {
         if (this.tutorial) {
           this.gameOver = true
           markTutorialDone()
-          const prevTop = getHighScores(this.book.title)[0] ?? 0
-          this.endScores = saveHighScore(this.book.title, this.score)
-          this.isNewHigh = this.score > 0 && this.score >= prevTop
+          this.endScores = this.saveScoreAndProgress()
         } else if (this.lives <= 0 || this.endGrade === 'D' || this.endGrade === 'F') {
           this.gameOver = true
           clearSave()
-          const prevTop = getHighScores(this.book.title)[0] ?? 0
-          this.endScores = saveHighScore(this.book.title, this.score)
-          this.isNewHigh = this.score > 0 && this.score >= prevTop
+          this.endScores = this.saveScoreAndProgress()
         } else {
           this.endGradeAdvance()
         }
@@ -504,6 +496,14 @@ export class Game {
     }
   }
 
+  private saveScoreAndProgress(): number[] {
+    const prevTop = getHighScores(this.book.title)[0] ?? 0
+    const scores = saveHighScore(this.book.title, this.score)
+    this.isNewHigh = this.score > 0 && this.score >= prevTop
+    saveBestProgress(this.book.title, this.chapterIdx + 1, this.paragraphIdx + 1, this.score)
+    return scores
+  }
+
   private measurePaddle() {
     const font = `bold ${this.paddleH - 5}px 'JetBrains Mono', 'Courier New', monospace`
     const prepared = prepareWithSegments(this.paddleText, font)
@@ -658,10 +658,12 @@ export class Game {
         if (rare) this.rareCount++
         const title = !isPunc && !isStop && isTitleWord(word)
         const palindrome = !isPunc && !isStop && isPalindrome(word)
+        const allVowels = !isPunc && !isStop && hasAllVowels(word)
         const basePoints = isPunc ? 5 : scoreWord(word, isStop)
         let pointsMult = 1
         if (rare) pointsMult *= 2
         if (palindrome) pointsMult *= 5
+        if (allVowels) pointsMult *= 3
         const brick: Brick = {
           word,
           x: curX,
@@ -682,6 +684,7 @@ export class Game {
           rare,
           title,
           palindrome,
+          allVowels,
         }
         rowBricks.push(brick)
         this.bricks.push(brick)
@@ -724,7 +727,7 @@ export class Game {
               w: actualW, h: rowH,
               alive: true, alpha: 1, color: '#3a3f4a', points: 0, boxed: true,
               breakOff: 0, breakOffVx: 0, breakOffAngle: 0,
-              breakOffGroupId: 0, breakOffOrigX: 0, breakOffOrigY: 0, rare: false, title: false, palindrome: false,
+              breakOffGroupId: 0, breakOffOrigX: 0, breakOffOrigY: 0, rare: false, title: false, palindrome: false, allVowels: false,
             })
           }
         }
@@ -1000,9 +1003,12 @@ export class Game {
 
     // ── End-of-chapter sequence (all in-field, no overlays) ──
 
+    // Hold click/touch to fast-forward end sequences (5x speed)
+    const endSpeedMul = this.mouseDown ? 5 : 1
+
     // Phase 0: Gray cleanup — only grays left, pop them in series with base points
     if (this.levelState === 'grayCleanup') {
-      this.grayPopTimer += dt
+      this.grayPopTimer += dt * endSpeedMul
       const popsPerSec = 10
       const targetIdx = Math.floor(this.grayPopTimer * popsPerSec)
       while (this.grayPopIdx < this.grayPopBricks.length && this.grayPopIdx < targetIdx) {
@@ -1043,7 +1049,7 @@ export class Game {
 
     // Phase 1: Pop remaining bricks one by one
     if (this.levelState === 'endPopping') {
-      this.endTimer += dt
+      this.endTimer += dt * endSpeedMul
       // Skip straight to tally if nothing to pop (clean clear)
       if (this.endPopBricks.length === 0) {
         if (this.endTimer > 0.5) {
@@ -1086,7 +1092,7 @@ export class Game {
 
     // Phase 2: Score tally — count up broken words, then deduct missed
     if (this.levelState === 'endTally') {
-      this.endTimer += dt
+      this.endTimer += dt * endSpeedMul
       const tallyPerSec = 32
       const targetIdx = Math.floor(this.endTimer * tallyPerSec)
       while (this.endTallyIdx < this.levelWords.length && this.endTallyIdx < targetIdx) {
@@ -1134,15 +1140,11 @@ export class Game {
         if (this.tutorial) {
           this.gameOver = true
           markTutorialDone()
-          const prevTop = getHighScores(this.book.title)[0] ?? 0
-          this.endScores = saveHighScore(this.book.title, this.score)
-          this.isNewHigh = this.score > 0 && this.score >= prevTop
+          this.endScores = this.saveScoreAndProgress()
         } else if (this.lives <= 0 || this.endGrade === 'D' || this.endGrade === 'F') {
           this.gameOver = true
           clearSave()
-          const prevTop = getHighScores(this.book.title)[0] ?? 0
-          this.endScores = saveHighScore(this.book.title, this.score)
-          this.isNewHigh = this.score > 0 && this.score >= prevTop
+          this.endScores = this.saveScoreAndProgress()
         } else {
           this.endGradeAdvance()
         }
@@ -1228,9 +1230,7 @@ export class Game {
             if (this.lives <= 0) {
               this.gameOver = true
               clearSave()
-              const prevTop = getHighScores(this.book.title)[0] ?? 0
-              this.endScores = saveHighScore(this.book.title, this.score)
-              this.isNewHigh = this.score > 0 && this.score >= prevTop
+              this.endScores = this.saveScoreAndProgress()
             } else {
               this.spawnBall()
             }
@@ -1325,9 +1325,7 @@ export class Game {
           if (this.lives <= 0) {
             this.gameOver = true
             clearSave()
-            const prevTop = getHighScores(this.book.title)[0] ?? 0
-            this.endScores = saveHighScore(this.book.title, this.score)
-            this.isNewHigh = this.score > 0 && this.score >= prevTop
+            this.endScores = this.saveScoreAndProgress()
           }
         } else if (ev.type === 'bossHit') {
           this.particles.push({
@@ -2137,17 +2135,9 @@ export class Game {
   }
 
   private closeShopAndAdvance() {
-    // Snapshot purchased items before advanceLevel resets anything
-    const bought = this.shopItems.filter(it => it.bought)
     this.levelState = 'playing'
     this.levelWords = []
     this.advanceLevel()
-    // Reapply upgrade purchases that advanceLevel may have wiped (chapter reset)
-    // Life purchases already applied and survive advanceLevel
-    for (const item of bought) {
-      if (item.id === 'life') continue  // already applied
-      this.applyShopPurchase(item.id, item.tier)
-    }
   }
 
   /** Apply a shop purchase effect. tier = 1-4 (common-epic), determines strength. */
@@ -2170,7 +2160,9 @@ export class Game {
       this.paddleText = `${equals} BOOK BREAKER ${equals}`
       this.measurePaddle()
     } else if (id === 'multi') {
-      while (this.balls.length < 3) {
+      const MULTI_COUNTS = [0, 3, 4, 5, 6]  // tier 1→3, 2→4, 3→5, 4→6
+      const target = Math.min(9, MULTI_COUNTS[tier])
+      while (this.balls.length < target) {
         this.balls.push({
           x: this.paddleX + this.paddleW / 2 + (this.balls.length % 2 === 0 ? -12 : 12),
           y: this.paddleY + this.paddleH + 9,
@@ -2257,33 +2249,14 @@ export class Game {
     this.paddleVy = 0
     this.pickups = []
 
-    if (isNewChapter) {
-      // New chapter — full reset of upgrades
-      this.widenLevel = 0
-      this.safetyHits = 0
-      this.charge = 0
-      this.ballSizeBonus = 0
-      this.magnetCharges = 0
-      this.paddleText = 'BOOK BREAKER'
-      this.measurePaddle()
-      // Reset to single ball
-      this.balls = [{
-        x: this.paddleX + this.paddleW / 2,
-        y: this.paddleY + this.paddleH + 9,
-        vx: 0, vy: 0, r: this.ballR,
-        trail: [], stuck: true,
-        backWallHits: 0, slamStacks: 0,
-        blastCharge: 0, pierceLeft: 0, magnetSpeed: 0, magnetImmunity: 0, magnetOffsetX: 0, homingLeft: 0, homingCooldown: 0, ghostLeft: 0, ghostPhasedBricks: new Set(), bossImmunity: 0,
-      }]
-    } else {
-      // Same chapter — carry over charge, multiball, pierce, blast, widen, safety
-      // Just re-stick all balls and reset speed stacks
-      for (const ball of this.balls) {
-        ball.stuck = true
-        ball.trail = []
-        ball.backWallHits = 0
-        ball.slamStacks = 0
-      }
+    // Carry over all upgrades (widen, safety, multiball, bigball, etc.)
+    // Upgrades only reset on life loss, not chapter transitions
+    // Re-stick all balls and reset per-ball speed stacks
+    for (const ball of this.balls) {
+      ball.stuck = true
+      ball.trail = []
+      ball.backWallHits = 0
+      ball.slamStacks = 0
     }
     if (!this.tutorial) saveToStorage(this.getSaveState())
   }
@@ -2376,13 +2349,23 @@ export class Game {
 
   private updateSidebar() {
     flushWordLog()
-    // Sync letter grid from counts (batched, not per-brick)
+    // Sync letter grid + mini alphabet from counts (batched, not per-brick)
     for (let i = 0; i < 26; i++) {
       const ch = String.fromCharCode(65 + i)
+      const collected = this.letterCounts[ch] > 0
       const el = document.getElementById(`letter-${ch}`)
       if (el) {
-        if (this.letterCounts[ch] > 0) el.classList.add('collected')
+        if (collected) el.classList.add('collected')
         else el.classList.remove('collected')
+      }
+      const mel = document.getElementById(`mini-letter-${ch}`)
+      if (mel) {
+        if (collected && !mel.classList.contains('collected')) {
+          mel.classList.add('collected', 'pop')
+          mel.addEventListener('animationend', () => mel.classList.remove('pop'), { once: true })
+        } else if (!collected) {
+          mel.classList.remove('collected', 'pop')
+        }
       }
     }
     const scoreStr = this.score.toLocaleString()
@@ -2403,7 +2386,7 @@ export class Game {
     } else {
       const chapter = this.book.chapters[this.chapterIdx]
       const lastPara = Math.min(this.paragraphIdx + this.levelParagraphCount, chapter.paragraphs.length)
-      sidebarEls.chapterLabel.textContent = `Ch ${this.chapterIdx + 1}  ·  P${this.paragraphIdx + 1}-${lastPara}/${chapter.paragraphs.length}`
+      sidebarEls.chapterLabel.textContent = `Ch ${this.chapterIdx + 1}  ·  Lv ${this.paragraphIdx + 1}-${lastPara}/${chapter.paragraphs.length}`
       const bricksAlive = this.bricks.filter(b => b.alive).length
       const paraBreaks = this.wordsInParagraph.slice(0, this.wordCursor).filter(w => w === Game.PARA_BREAK).length
       const broken = (this.wordCursor - paraBreaks) - bricksAlive
@@ -2419,8 +2402,13 @@ export class Game {
       ms.textContent = abbrev(this.score)
       document.getElementById('mini-lives')!.textContent = livesStr
       document.getElementById('mini-combo')!.textContent = comboStr
-      document.getElementById('mini-words')!.textContent = abbrev(this.wordsBroken)
       document.getElementById('mini-gold')!.textContent = String(this.gold)
+      const chapter = this.book.chapters[this.chapterIdx]
+      const lastPara = Math.min(this.paragraphIdx + this.levelParagraphCount, chapter.paragraphs.length)
+      const mcl = document.getElementById('mini-chapter-label')
+      if (mcl) mcl.textContent = `Ch ${this.chapterIdx + 1}`
+      const mc = document.getElementById('mini-chapter')
+      if (mc) mc.textContent = `Lv ${this.paragraphIdx + 1}`
     }
 
   }

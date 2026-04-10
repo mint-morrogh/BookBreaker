@@ -18,6 +18,7 @@ export interface Brick {
   rare: boolean           // true for longest word in the book
   title: boolean          // true for words from the book's title
   palindrome: boolean     // true for palindrome words (4+ letters)
+  allVowels: boolean      // true for words containing all five vowels (a,e,i,o,u)
 }
 
 export interface Ball {

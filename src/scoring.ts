@@ -39,6 +39,25 @@ export function getTopScore(bookTitle: string): number {
   return scores.length > 0 ? scores[0] : 0
 }
 
+// ── Best progress (chapter + stage reached) ──────────────────
+export interface BookProgress { chapter: number; stage: number; score: number }
+
+export function saveBestProgress(bookTitle: string, chapter: number, stage: number, score: number): void {
+  const prev = getBestProgress(bookTitle)
+  // Keep if further in the book, or same spot with higher score
+  if (!prev || chapter > prev.chapter || (chapter === prev.chapter && stage > prev.stage) ||
+      (chapter === prev.chapter && stage === prev.stage && score > prev.score)) {
+    localStorage.setItem(`bb_progress_${bookTitle}`, JSON.stringify({ chapter, stage, score }))
+  }
+}
+
+export function getBestProgress(bookTitle: string): BookProgress | null {
+  try {
+    const raw = localStorage.getItem(`bb_progress_${bookTitle}`)
+    return raw ? JSON.parse(raw) : null
+  } catch { return null }
+}
+
 export function markBookBeaten(bookTitle: string): void {
   localStorage.setItem(`bb_beaten_${bookTitle}`, '1')
 }

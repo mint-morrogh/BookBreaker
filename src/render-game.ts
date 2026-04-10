@@ -97,6 +97,38 @@ export function renderGame(
     ctx.globalAlpha = 1
   }
 
+  // Ball aura — nearby dots tinted with ball color, small radius scales with ball size
+  for (const ball of state.balls) {
+    if (ball.stuck) continue
+    const speed = ball.magnetSpeed > 0
+      ? ball.magnetSpeed
+      : Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy)
+    const speedRatio = state.ballSpeed > 0 ? speed / state.ballSpeed : 0
+    const rawStep = Math.log(Math.max(1, speedRatio)) / Math.log(1.05)
+    const intensity = Math.min(13, Math.max(0, Math.round((rawStep / 13) ** 1.6 * 13)))
+    const col = BALL_COLORS[intensity]
+    // Base radius 26, grows with ball size (default r ~5.6)
+    const extra = Math.max(0, ball.r - 5.6)
+    const auraR = 26 + extra * 5
+    const auraRSq = auraR * auraR
+    // Alpha ramps up with size: 0.35 at default, up to 0.55 at max
+    const peakAlpha = 0.35 + Math.min(0.20, extra * 0.018)
+    ctx.fillStyle = col
+    for (const dot of state.dots) {
+      const ddx = dot.x - ball.x
+      const ddy = dot.y - ball.y
+      const distSq = ddx * ddx + ddy * ddy
+      if (distSq < auraRSq) {
+        const t = 1 - Math.sqrt(distSq) / auraR
+        ctx.globalAlpha = t * peakAlpha
+        ctx.beginPath()
+        ctx.arc(dot.x, dot.y, 2.0, 0, Math.PI * 2)
+        ctx.fill()
+      }
+    }
+  }
+  ctx.globalAlpha = 1
+
   // Bricks — translate context for smooth sub-pixel scrolling
   ctx.font = state.brickFont
   ctx.textBaseline = 'middle'
@@ -140,13 +172,19 @@ export function renderGame(
         ctx.shadowColor = '#c0c8d8'
         ctx.shadowBlur = state.isMobile ? 5 : 10
       }
+      // All-vowels bricks get a pulsing outer glow in their own color
+      if (brick.allVowels) {
+        const pulse = 0.6 + 0.4 * Math.sin(state.gameTime * 2.5)
+        ctx.shadowColor = brickCol
+        ctx.shadowBlur = (state.isMobile ? 6 : 16) * pulse
+      }
       ctx.fillStyle = brick.palindrome ? '#111824' : '#0f1520'
       ctx.strokeStyle = brickCol
-      ctx.lineWidth = brick.rare ? 1.5 : (brick.title || brick.palindrome) ? 1.5 : 1
+      ctx.lineWidth = brick.rare ? 1.5 : (brick.title || brick.palindrome || brick.allVowels) ? 1.5 : 1
       roundRect(ctx, brick.x, brick.y, brick.w, brick.h, 3)
       ctx.fill()
       if (!brick.palindrome) ctx.stroke()  // palindromes draw their own gradient border later
-      if (brick.title || brick.palindrome) ctx.shadowBlur = 0
+      if (brick.title || brick.palindrome || brick.allVowels) ctx.shadowBlur = 0
       // Second glow pass for rare — doubles the glow intensity
       if (brick.rare) {
         ctx.stroke()
@@ -197,6 +235,17 @@ export function renderGame(
         grad.addColorStop(1, dim)
         ctx.strokeStyle = grad
         ctx.lineWidth = 3
+        roundRect(ctx, brick.x, brick.y, brick.w, brick.h, 3)
+        ctx.stroke()
+      }
+
+      // All-vowels brick — subtle background tint + border in brick's own color
+      if (brick.allVowels) {
+        ctx.fillStyle = hexToRgba(brickCol, 0.10)
+        roundRect(ctx, brick.x, brick.y, brick.w, brick.h, 3)
+        ctx.fill()
+        ctx.strokeStyle = hexToRgba(brickCol, 0.45)
+        ctx.lineWidth = 1.5
         roundRect(ctx, brick.x, brick.y, brick.w, brick.h, 3)
         ctx.stroke()
       }
@@ -265,6 +314,38 @@ export function renderGame(
       } else {
         ctx.fillText(brick.word, cx, brick.y + brick.h / 2 + 1)
       }
+    } else if (brick.allVowels) {
+      // Per-character rendering — vowels pulse between brick color and white
+      const vowels = new Set(['a','e','i','o','u'])
+      const word = brick.word
+      const bc = parseInt(brick.color.slice(1), 16)
+      const bR = (bc >> 16) & 255, bG = (bc >> 8) & 255, bB = bc & 255
+      ctx.textAlign = 'left'
+      const totalW = ctx.measureText(word).width
+      let charX = brick.x + (brick.w - totalW) / 2
+      const charY = brick.y + brick.h / 2 + 1
+      for (let ci = 0; ci < word.length; ci++) {
+        const ch = word[ci]
+        const isVowel = vowels.has(ch.toLowerCase())
+        if (isVowel) {
+          const phase = state.gameTime * 3 + ci * 1.2
+          const glow = 0.5 + 0.5 * Math.sin(phase)
+          ctx.shadowColor = brick.color
+          ctx.shadowBlur = Math.round((state.isMobile ? 3 : 8) * glow)
+          // Interpolate brick color → white
+          const r = bR + Math.round((255 - bR) * glow)
+          const g = bG + Math.round((255 - bG) * glow)
+          const b = bB + Math.round((255 - bB) * glow)
+          ctx.fillStyle = `rgb(${r},${g},${b})`
+        } else {
+          ctx.shadowBlur = 0
+          ctx.fillStyle = brick.color
+        }
+        ctx.fillText(ch, charX, charY)
+        charX += ctx.measureText(ch).width
+      }
+      ctx.shadowBlur = 0
+      ctx.textAlign = 'center'
     } else {
       ctx.fillText(brick.word, brick.x + brick.w / 2, brick.y + brick.h / 2 + 1)
     }

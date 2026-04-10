@@ -52,6 +52,13 @@ export function isPalindrome(word: string): boolean {
   return w === rev
 }
 
+export function hasAllVowels(word: string): boolean {
+  const w = word.toLowerCase().replace(/[^a-z]/g, '')
+  if (w.length < 4) return false
+  if (activeTagMap.get(w) === 'stopword') return false
+  return w.includes('a') && w.includes('e') && w.includes('i') && w.includes('o') && w.includes('u')
+}
+
 const TITLE_STOP = new Set([
   'the','a','an','of','in','to','for','and','but','or','on','at','by','with','from','as','is','was',
 ])

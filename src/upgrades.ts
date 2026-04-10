@@ -56,12 +56,14 @@ export function activateUpgrade(pickup: Pickup, state: UpgradeState): UpgradeEve
     events.push({ type: 'clampPaddle' })
   } else if (pickup.type === 'multiball') {
     const ballR = 5.6 * (1 + state.ballSizeBonus)
+    const toSpawn = Math.min(2, 9 - state.balls.length)  // cap at 9 balls total
+    if (toSpawn <= 0) return events
     // Find a ball to split from — prefer active, fall back to stuck (held on paddle)
     const source = state.balls.find(b => !b.stuck) ?? state.balls.find(b => b.stuck)
     if (source) {
       if (source.stuck) {
         // Ball is held on paddle — spawn extras also stuck, they'll all launch together
-        for (let i = 0; i < 2; i++) {
+        for (let i = 0; i < toSpawn; i++) {
           state.balls.push({
             x: source.x + (i === 0 ? -12 : 12),
             y: source.y,
@@ -79,7 +81,7 @@ export function activateUpgrade(pickup: Pickup, state: UpgradeState): UpgradeEve
       } else {
         const speed = Math.sqrt(source.vx * source.vx + source.vy * source.vy)
         const baseAngle = Math.atan2(source.vy, source.vx)
-        for (let i = 0; i < 2; i++) {
+        for (let i = 0; i < toSpawn; i++) {
           const angle = baseAngle + (i === 0 ? -0.5 : 0.5)
           state.balls.push({
             x: source.x,
@@ -289,7 +291,8 @@ export function hitBrick(brick: Brick, ball: Ball, state: UpgradeState): void {
   // Title bricks get 4x gold
   const coinTier = colorTier(brick.color)
   const baseGold = coinTier <= 0 ? 0 : coinTier === 1 ? 2 : coinTier === 2 ? 3 : coinTier === 3 ? 5 : 8
-  const goldAmt = brick.title ? baseGold * 4 : baseGold
+  let goldAmt = brick.title ? baseGold * 4 : baseGold
+  if (brick.allVowels) goldAmt *= 3
   if (goldAmt > 0) {
     state.gold += goldAmt
     const bsy = brick.y - state.bricksScrollY
@@ -386,14 +389,51 @@ export function hitBrick(brick: Brick, ball: Ball, state: UpgradeState): void {
     }
   }
 
+  // All-vowels brick special effects — violet burst
+  if (brick.allVowels) {
+    const cx2 = brick.x + brick.w / 2
+    const cy2 = brickScreenY + brick.h / 2
+    // Expanding violet ring
+    state.particles.push({
+      x: cx2, y: cy2, vx: 0, vy: 0,
+      char: 'o', life: 0.5, maxLife: 0.6,
+      color: '#a855f7', size: 38,
+    })
+    // Radiating burst particles
+    for (let i = 0; i < 10; i++) {
+      const angle = (i / 10) * Math.PI * 2
+      const speed = 110 + Math.random() * 70
+      state.particles.push({
+        x: cx2, y: cy2,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        char: '✦', life: 0.5 + Math.random() * 0.3, maxLife: 0.8,
+        color: '#c084fc', size: 13 + Math.random() * 4,
+      })
+    }
+    // Sparkle particles
+    for (let i = 0; i < 5; i++) {
+      state.particles.push({
+        x: cx2 + (Math.random() - 0.5) * brick.w,
+        y: cy2 + (Math.random() - 0.5) * brick.h,
+        vx: (Math.random() - 0.5) * 70,
+        vy: -55 - Math.random() * 55,
+        char: '◆',
+        life: 0.6 + Math.random() * 0.3, maxLife: 0.9,
+        color: '#a855f7', size: 11 + Math.random() * 4,
+      })
+    }
+  }
+
   // Special brick label — "Super rare!" if multiple types, otherwise individual name
-  const specialTypes = [brick.rare, brick.title, brick.palindrome].filter(Boolean).length
+  const specialTypes = [brick.rare, brick.title, brick.palindrome, brick.allVowels].filter(Boolean).length
   if (specialTypes > 0) {
     const cx2 = brick.x + brick.w / 2
     const cy2 = brickScreenY + brick.h / 2
     const label = specialTypes >= 2 ? 'Super rare!'
       : brick.rare ? 'RARE!'
       : brick.palindrome ? 'Palindrome!'
+      : brick.allVowels ? 'All Vowels!'
       : 'TITLE BRICK'
     const labelColor = brick.rare ? rareColor(state.gameTime) : brick.color
     state.particles.push({
@@ -459,7 +499,9 @@ export function hitBrick(brick: Brick, ball: Ball, state: UpgradeState): void {
   // Roll for upgrade drop
   // Rare bricks: 50% drop, tier determined by nearest tier color at break time
   const tier = brick.rare ? rareColorTier(state.gameTime) : colorTier(brick.color)
-  const effectiveChance = brick.rare ? 1.0 : (tier > 0 ? dropChance(tier) + state.dropBonus : 0)
+  const isSpecial = brick.title || brick.palindrome || brick.allVowels
+  const baseChance = tier > 0 ? dropChance(tier) + state.dropBonus : 0
+  const effectiveChance = brick.rare ? 1.0 : isSpecial ? baseChance * 2 : baseChance
   if (effectiveChance > 0 && Math.random() < effectiveChance) {
     // Build pool of eligible drop types, excluding maxed upgrades
     type DropEntry = { type: UpgradeType; weight: number }
@@ -495,7 +537,7 @@ export function hitBrick(brick: Brick, ball: Ball, state: UpgradeState): void {
       wobblePhase: Math.random() * Math.PI * 2,
       type,
       tier,
-      color: brick.color,
+      color: brick.rare ? rareColor(state.gameTime) : brick.color,
       alive: true,
     })
   }

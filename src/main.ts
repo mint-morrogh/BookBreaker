@@ -1,7 +1,7 @@
 import { Game, getTopScore } from './game'
 import { BOOKS, makeCustomBook, addCustomBook, removeCustomBook } from './content'
 import { tagBook, buildRareWords } from './tagger'
-import { clearAllScores, isBookBeaten } from './scoring'
+import { clearAllScores, isBookBeaten, getBestProgress } from './scoring'
 import { parseFile, detectFormat, ACCEPTED_EXTENSIONS } from './book-parser'
 import { createTutorialBook, isTutorialDone, markTutorialDone, TutorialController } from './tutorial'
 
@@ -270,7 +270,7 @@ function showMainMenu() {
   if (save) {
     const book = BOOKS[save.bookIdx]
     const chapter = book?.chapters[save.chapterIdx]
-    const chLabel = chapter ? `Ch ${save.chapterIdx + 1}, P${save.paragraphIdx + 1}` : ''
+    const chLabel = chapter ? `Ch ${save.chapterIdx + 1}, Lv ${save.paragraphIdx + 1}` : ''
 
     const info = document.createElement('div')
     info.className = 'menu-save-info'
@@ -400,13 +400,18 @@ function renderBookList() {
 
     if (unlocked) {
       const isCustom = book.difficulty === 'Custom'
+      const prog = getBestProgress(book.title)
+      const progLabel = prog ? `Ch ${prog.chapter}, Lv ${prog.stage}` : ''
+      const scoreLabel = top > 0
+        ? (progLabel ? `${progLabel} — ${top.toLocaleString()}` : top.toLocaleString())
+        : ''
       el.innerHTML = `
         ${beaten ? '<span class="book-opt-star">★</span>' : ''}
         <div class="book-opt-title">${book.title}</div>
         <div class="book-opt-author">${book.author || 'Unknown'}</div>
         <div class="book-opt-meta">
           <span>${book.chapters.length} chapters</span>
-          ${top > 0 ? `<span class="book-opt-score${beaten ? ' beaten' : ''}">${top.toLocaleString()}</span>` : ''}
+          ${scoreLabel ? `<span class="book-opt-score${beaten ? ' beaten' : ''}">${scoreLabel}</span>` : ''}
           <span style="color:${diffColor}">${book.difficulty}</span>
           ${isCustom ? '<span class="book-opt-delete">✕</span>' : ''}
         </div>
